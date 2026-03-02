@@ -31,3 +31,6 @@ dist/
 
 # MCP-specific
 .mcp_cache/
+
+# Persistent data (crypto keys, sync state)
+.data/

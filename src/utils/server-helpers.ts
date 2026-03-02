@@ -79,7 +79,8 @@ export function getMatrixContext(
 export async function createConfiguredMatrixClient(
   homeserverUrl: string,
   matrixUserId: string,
-  accessToken: string
+  accessToken: string,
+  syncToken?: string
 ) {
   return createMatrixClient({
     homeserverUrl,
@@ -88,5 +89,6 @@ export async function createConfiguredMatrixClient(
     enableOAuth: ENABLE_OAUTH,
     tokenExchangeConfig: tokenExchangeConfig,
     enableTokenExchange: ENABLE_TOKEN_EXCHANGE,
+    syncToken,
   });
 }

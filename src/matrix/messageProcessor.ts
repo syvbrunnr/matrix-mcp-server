@@ -31,6 +31,11 @@ export async function processMessage(
   if (event.getType() === EventType.RoomMessage && content) {
     // Extract threading/relation metadata
     const relatesToRaw = content["m.relates_to"] as Record<string, any> | undefined;
+
+    // Skip m.replace events (raw edit events — original updated in-place) and redacted events.
+    if (relatesToRaw?.rel_type === "m.replace") return null;
+    if (event.isRedacted()) return null;
+
     const replyToEventId = relatesToRaw?.["m.in_reply_to"]?.event_id as string | undefined;
     const threadRootEventId = (relatesToRaw?.rel_type === "m.thread" || relatesToRaw?.rel_type === "io.element.thread")
       ? (relatesToRaw.event_id as string | undefined)

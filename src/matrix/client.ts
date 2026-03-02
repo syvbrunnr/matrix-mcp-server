@@ -2,8 +2,18 @@ import * as sdk from "matrix-js-sdk";
 import { MatrixClient, ClientEvent } from "matrix-js-sdk";
 import https from "https";
 import fetch from "node-fetch";
+import path from "path";
+import { mkdirSync, existsSync, readFileSync, writeFileSync } from "fs";
+import { randomBytes } from "crypto";
 import { exchangeToken, TokenExchangeConfig } from "../auth/tokenExchange.js";
 import { getCachedClient, cacheClient, removeCachedClient } from "./clientCache.js";
+import { installIDBAdapter } from "./idb-sqlite-adapter.js";
+
+// Install SQLite-backed IndexedDB before any crypto init.
+// Uses MATRIX_DATA_DIR env var, defaults to .data/ in cwd.
+const DATA_DIR = process.env.MATRIX_DATA_DIR ?? path.join(process.cwd(), ".data");
+mkdirSync(DATA_DIR, { recursive: true });
+installIDBAdapter(DATA_DIR);
 
 /**
  * Configuration for Matrix client creation
@@ -15,6 +25,7 @@ export interface MatrixClientConfig {
   enableOAuth: boolean;
   tokenExchangeConfig?: TokenExchangeConfig;
   enableTokenExchange: boolean;
+  syncToken?: string;
 }
 
 /**
@@ -33,6 +44,7 @@ export async function createMatrixClient(
     enableOAuth,
     tokenExchangeConfig,
     enableTokenExchange,
+    syncToken,
   } = config;
 
   if (!homeserverUrl) {
@@ -66,12 +78,60 @@ export async function createMatrixClient(
     matrixAccessToken = accessToken;
   }
 
+  const FETCH_TIMEOUT_MS = 15_000;
+  const SYNC_FETCH_TIMEOUT_MS = 65_000; // sync long-poll can wait 30s server-side
+  const httpsAgent = new https.Agent({ rejectUnauthorized: false });
+
+  const timedFetch = async (input: any, init?: any) => {
+    // Use longer timeout for /sync long-poll requests
+    const url = typeof input === "string" ? input : input?.url ?? "";
+    const timeoutMs = url.includes("/_matrix/client") && url.includes("/sync")
+      ? SYNC_FETCH_TIMEOUT_MS
+      : FETCH_TIMEOUT_MS;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      return await fetch(input, { ...(init || {}), agent: httpsAgent, signal: controller.signal as any }) as any;
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+
+  // Fetch deviceId from whoami — required by initRustCrypto
+  let deviceId: string | undefined;
+  try {
+    const whoamiRes = await timedFetch(`${homeserverUrl}/_matrix/client/v3/account/whoami`, {
+      headers: { Authorization: `Bearer ${matrixAccessToken}` },
+    });
+    const whoami = await whoamiRes.json() as any;
+    deviceId = whoami.device_id;
+  } catch (e: any) {
+    console.warn("whoami failed, deviceId unknown:", e.message);
+  }
+
+  // Load SSSS recovery key from disk — needed by getSecretStorageKey on second+ runs.
+  const recoveryKeyFile = path.join(DATA_DIR, "ssss-recovery-key");
+  let cachedRecoveryKey: Uint8Array | undefined = existsSync(recoveryKeyFile)
+    ? new Uint8Array(Buffer.from(readFileSync(recoveryKeyFile, "utf-8").trim(), "hex"))
+    : undefined;
+
   const client = sdk.createClient({
     baseUrl: homeserverUrl,
     userId,
-    fetchFn: async (input: any, init?: any) => {
-      const agent = new https.Agent({ rejectUnauthorized: false });
-      return fetch(input, { ...(init || {}), agent }) as any;
+    ...(deviceId ? { deviceId } : {}),
+    fetchFn: timedFetch,
+    cryptoCallbacks: {
+      // Supplies the SSSS decryption key when the SDK needs to read/write secrets.
+      getSecretStorageKey: async ({ keys }) => {
+        if (!cachedRecoveryKey) return null;
+        const keyId = Object.keys(keys)[0];
+        if (!keyId) return null;
+        return [keyId, cachedRecoveryKey];
+      },
+      // Called after bootstrapSecretStorage creates a new key — cache it immediately.
+      cacheSecretStorageKey: (_keyId, _keyInfo, key) => {
+        cachedRecoveryKey = key;
+      },
     },
   });
 
@@ -90,15 +150,76 @@ export async function createMatrixClient(
       throw new Error("No valid access token available for Matrix client.");
     }
 
-    await client.startClient({ initialSyncLimit: 100 });
+    // Enable E2EE with persistent SQLite-backed crypto store (always-on).
+    // Use userId as crypto DB prefix so each user gets their own SQLite file.
+    const cryptoDbPrefix = userId.replace(/[^a-zA-Z0-9_]/g, "_").replace(/^_+/, "");
+    await client.initRustCrypto({ useIndexedDB: true, cryptoDatabasePrefix: cryptoDbPrefix });
+    console.error(`[E2EE] Crypto initialised. Device ID: ${client.getDeviceId()}`);
 
-    // Wait for the initial sync to complete
-    await new Promise<void>((resolve, reject) => {
-      client.once(ClientEvent.Sync, (state) => {
-        if (state === "PREPARED") resolve();
-        else reject(new Error(`Sync failed with state: ${state}`));
-      });
-    });
+    // Phase 2: SSSS + cross-signing — activated when MATRIX_PASSWORD env var is set.
+    const matrixPassword = process.env.MATRIX_PASSWORD;
+    if (matrixPassword) {
+      try {
+        const crypto = client.getCrypto();
+        if (crypto) {
+          await crypto.bootstrapCrossSigning({
+            authUploadDeviceSigningKeys: async (makeRequest) => {
+              await makeRequest({
+                type: "m.login.password",
+                identifier: { type: "m.id.user", user: userId },
+                password: matrixPassword,
+              });
+            },
+          });
+
+          // Load or generate a recovery key for SSSS.
+          // Stored in DATA_DIR/ssss-recovery-key so it survives server restarts.
+          let recoveryKeyBytes: Uint8Array;
+          if (cachedRecoveryKey) {
+            recoveryKeyBytes = cachedRecoveryKey;
+            console.error("[E2EE] Using existing SSSS recovery key");
+          } else {
+            recoveryKeyBytes = new Uint8Array(randomBytes(32));
+            writeFileSync(recoveryKeyFile, Buffer.from(recoveryKeyBytes).toString("hex"), { mode: 0o600 });
+            cachedRecoveryKey = recoveryKeyBytes;
+            console.error("[E2EE] Generated new SSSS recovery key — saved to", recoveryKeyFile);
+          }
+
+          await crypto.bootstrapSecretStorage({
+            createSecretStorageKey: async () => ({
+              keyInfo: {},
+              privateKey: recoveryKeyBytes,
+            }),
+          });
+          await crypto.checkKeyBackupAndEnable();
+          console.error("[E2EE] Phase 2 complete: cross-signing + SSSS bootstrapped");
+        }
+      } catch (e: any) {
+        console.warn("[E2EE] Phase 2 bootstrap failed (non-fatal):", e.message);
+      }
+    }
+
+    // Resume from a persisted sync token so /sync starts from exactly where we left off.
+    if (syncToken) {
+      client.store.setSyncToken(syncToken);
+      console.error(`[Sync] Resuming from stored sync token`);
+    }
+
+    await client.startClient({ initialSyncLimit: 20 });
+
+    // Wait for the initial sync to complete (with 30s timeout to prevent indefinite hangs)
+    const SYNC_TIMEOUT_MS = 30_000;
+    await Promise.race([
+      new Promise<void>((resolve, reject) => {
+        client.once(ClientEvent.Sync, (state) => {
+          if (state === "PREPARED") resolve();
+          else reject(new Error(`Sync failed with state: ${state}`));
+        });
+      }),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error(`Matrix initial sync timed out after ${SYNC_TIMEOUT_MS / 1000}s`)), SYNC_TIMEOUT_MS)
+      ),
+    ]);
 
     // Cache the successfully created and synced client
     cacheClient(client, userId, homeserverUrl);

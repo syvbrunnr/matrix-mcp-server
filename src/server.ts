@@ -8,11 +8,15 @@ import { registerUserTools } from "./tools/tier0/users.js";
 import { registerSearchTools } from "./tools/tier0/search.js";
 import { registerNotificationTools } from "./tools/tier0/notifications.js";
 import { registerWaitForMessagesTools } from "./tools/tier0/wait-for-messages.js";
+import { registerInviteTools } from "./tools/tier0/invites.js";
 
 // Tier 1 (Action tools)
 import { registerMessagingTools } from "./tools/tier1/messaging.js";
 import { registerRoomManagementTools } from "./tools/tier1/room-management.js";
 import { registerRoomAdminTools } from "./tools/tier1/room-admin.js";
+import { registerMessageActionTools } from "./tools/tier1/message-actions.js";
+import { registerServerAdminTools } from "./tools/tier1/server-admin.js";
+import { registerThreadMessageTools } from "./tools/tier1/thread-messages.js";
 
 // Create MCP server instance
 const server = new McpServer(
@@ -37,10 +41,14 @@ registerUserTools(server);        // get-user-profile, get-my-profile, get-all-u
 registerSearchTools(server);      // search-public-rooms
 registerNotificationTools(server); // get-notification-counts, get-direct-messages
 registerWaitForMessagesTools(server); // wait-for-messages
+registerInviteTools(server);          // get-pending-invites
 
 // Tier 1: Action Matrix tools
 registerMessagingTools(server);       // send-message, send-direct-message
 registerRoomManagementTools(server);  // create-room, join-room, leave-room, invite-user
 registerRoomAdminTools(server);       // set-room-name, set-room-topic
+registerMessageActionTools(server);  // redact-event, send-reaction, edit-message
+registerServerAdminTools(server);    // restart-server
+registerThreadMessageTools(server);  // get-thread-messages
 
 export default server;

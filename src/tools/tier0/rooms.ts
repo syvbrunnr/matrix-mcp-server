@@ -12,7 +12,7 @@ export const listJoinedRoomsHandler = async (_input: any, { requestInfo, authInf
   try {
     const client = await createConfiguredMatrixClient(homeserverUrl, matrixUserId, accessToken);
 
-    const rooms = client.getRooms();
+    const rooms = client.getRooms().filter((r) => r.getMyMembership() === "join");
     return {
       content: rooms.map((room) => ({
         type: "text",
