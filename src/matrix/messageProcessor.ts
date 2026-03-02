@@ -41,7 +41,7 @@ export async function processMessage(
       ? (relatesToRaw.event_id as string | undefined)
       : undefined;
 
-    if (content.msgtype === "m.text") {
+    if (event.isDecryptionFailure() || content.msgtype === "m.text") {
       const metadata: Record<string, any> = {
         eventId: event.getId(),
         sender: event.getSender(),
