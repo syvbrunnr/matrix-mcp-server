@@ -50,6 +50,12 @@ export const createRoomHandler = async (
     if (isPrivate) {
       createOptions.initial_state = [
         {
+          type: "m.room.encryption",
+          content: {
+            algorithm: "m.megolm.v1.aes-sha2",
+          },
+        },
+        {
           type: "m.room.guest_access",
           content: {
             guest_access: "forbidden",

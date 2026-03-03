@@ -51,18 +51,30 @@ export const sendMessageHandler = async (
       };
     }
 
+    // Auto-detect thread: if replying to a message that's in a thread, stay in that thread
+    let effectiveThreadRoot = threadRootEventId;
+    if (replyToEventId && !effectiveThreadRoot) {
+      const targetEvent = room.findEventById(replyToEventId);
+      if (targetEvent) {
+        const targetRelatesTo = targetEvent.getContent()?.["m.relates_to"];
+        if (targetRelatesTo?.rel_type === "m.thread" || targetRelatesTo?.rel_type === "io.element.thread") {
+          effectiveThreadRoot = targetRelatesTo.event_id;
+        }
+      }
+    }
+
     // Build the m.relates_to object for threading and/or replies
     let relatesTo: Record<string, any> | undefined;
 
-    if (threadRootEventId) {
+    if (effectiveThreadRoot) {
       // Matrix threading — use io.element.thread for broad compatibility
       // (Element/Dendrite use this over the spec-standard m.thread)
       relatesTo = {
         rel_type: "io.element.thread",
-        event_id: threadRootEventId,
+        event_id: effectiveThreadRoot,
         // If replying within a thread, set is_falling_back so clients render correctly
         "m.in_reply_to": {
-          event_id: replyToEventId || threadRootEventId,
+          event_id: replyToEventId || effectiveThreadRoot,
         },
         is_falling_back: !replyToEventId,
       };
@@ -100,7 +112,7 @@ export const sendMessageHandler = async (
 
     const extras = [
       replyToEventId ? `reply to ${replyToEventId}` : "",
-      threadRootEventId ? `thread ${threadRootEventId}` : "",
+      effectiveThreadRoot ? `thread ${effectiveThreadRoot}` : "",
     ].filter(Boolean).join(", ");
 
     return {

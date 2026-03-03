@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { RoomEvent, MatrixEvent, EventType } from "matrix-js-sdk";
+import { RoomEvent, MatrixEvent, EventType, ClientEvent } from "matrix-js-sdk";
 import { createConfiguredMatrixClient, getAccessToken, getMatrixContext } from "../../utils/server-helpers.js";
 import { removeClientFromCache } from "../../matrix/client.js";
 import { ToolRegistrationFunction } from "../../types/tool-types.js";
@@ -82,7 +82,8 @@ export const waitForMessagesHandler = async (
   const { matrixUserId, homeserverUrl } = getMatrixContext(requestInfo?.headers);
   const accessToken = getAccessToken(requestInfo?.headers, authInfo?.token);
 
-  const timeout = Math.max(timeoutMs, 1000);
+  // Clamp: minimum 1s, maximum 2^31-1 ms (setTimeout overflows above this)
+  const timeout = Math.min(Math.max(timeoutMs, 1000), 2147483647);
 
   // Parse the continuation token: "eventId|timestamp"
   // Fall back to the internal cursor if the caller doesn't provide one.
@@ -171,7 +172,7 @@ export const waitForMessagesHandler = async (
               if (reactionDebounceTimer) clearTimeout(reactionDebounceTimer);
               reactionDebounceTimer = setTimeout(() => {
                 cleanup();
-                resolve({ messages: collected, reactions: liveReactions, timedOut: false, reactionsOnly: true });
+                resolve({ messages: collected, reactions: [...collectedReactions, ...liveReactions], timedOut: false, reactionsOnly: true });
               }, REACTION_DEBOUNCE_MS);
             }
           }
@@ -218,25 +219,37 @@ export const waitForMessagesHandler = async (
         if (debounceTimer) clearTimeout(debounceTimer);
         debounceTimer = setTimeout(() => {
           cleanup();
-          resolve({ messages: collected, reactions: liveReactions, timedOut: false });
+          resolve({ messages: collected, reactions: [...collectedReactions, ...liveReactions], timedOut: false });
         }, DEBOUNCE_MS);
+      };
+
+      // Live invite detection: resolve when a new room invite arrives during the wait
+      const onRoom = (room: any) => {
+        if (!liveModeActive) return;
+        if (room.getMyMembership() !== "invite") return;
+        const member = room.currentState?.getMember(ownUserId || "");
+        const invitedBy = member?.events?.member?.getSender() ?? "unknown";
+        pendingInvites.push({ roomId: room.roomId, roomName: room.name || room.roomId, invitedBy });
+        cleanup();
+        resolve({ messages: collected, reactions: [...collectedReactions, ...liveReactions], timedOut: false });
       };
 
       const timeoutHandle = setTimeout(() => {
         cleanup();
-        resolve({ messages: collected, reactions: liveReactions, timedOut: true });
+        resolve({ messages: collected, reactions: [...collectedReactions, ...liveReactions], timedOut: true });
       }, timeout);
 
       const syncCheckHandle = setInterval(() => {
         const state = client.getSyncState();
         if (state === "STOPPED" || state === null) {
           cleanup();
-          resolve({ messages: collected, reactions: liveReactions, timedOut: false, syncStale: true });
+          resolve({ messages: collected, reactions: [...collectedReactions, ...liveReactions], timedOut: false, syncStale: true });
         }
       }, SYNC_CHECK_INTERVAL_MS);
 
       function cleanup() {
         client.removeListener(RoomEvent.Timeline, onEvent);
+        client.removeListener(ClientEvent.Room, onRoom);
         clearTimeout(timeoutHandle);
         clearInterval(syncCheckHandle);
         if (debounceTimer) clearTimeout(debounceTimer);
@@ -246,6 +259,7 @@ export const waitForMessagesHandler = async (
       // Register listener FIRST — before the catch-up scan — so any event that fires
       // during the synchronous scan is collected (deduped by seenEventIds).
       client.on(RoomEvent.Timeline, onEvent);
+      client.on(ClientEvent.Room, onRoom);
 
       // --- Catch-up scan: check existing timeline for events newer than the since cursor ---
       // Runs synchronously (no await), so the event loop cannot interrupt it.

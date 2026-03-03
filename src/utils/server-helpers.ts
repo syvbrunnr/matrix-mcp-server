@@ -82,6 +82,11 @@ export async function createConfiguredMatrixClient(
   accessToken: string,
   syncToken?: string
 ) {
+  if (!accessToken) {
+    throw new Error(
+      "No access token available. Set MATRIX_ACCESS_TOKEN env var, or provide matrix_access_token header."
+    );
+  }
   return createMatrixClient({
     homeserverUrl,
     userId: matrixUserId,
