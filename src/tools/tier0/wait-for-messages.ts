@@ -2,6 +2,8 @@ import { z } from "zod";
 import { RoomEvent, MatrixEvent, EventType, ClientEvent } from "matrix-js-sdk";
 import { createConfiguredMatrixClient, getAccessToken, getMatrixContext } from "../../utils/server-helpers.js";
 import { removeClientFromCache } from "../../matrix/client.js";
+import { getCachedClient } from "../../matrix/clientCache.js";
+import { shouldEvictClientCache } from "../../utils/matrix-errors.js";
 import { ToolRegistrationFunction } from "../../types/tool-types.js";
 import { readFileSync, writeFileSync, mkdirSync } from "fs";
 import path from "path";
@@ -10,9 +12,14 @@ const DEFAULT_TIMEOUT_MS = 30_000; // 30 seconds
 const DEBOUNCE_MS = 500;
 const REACTION_DEBOUNCE_MS = 2 * 60 * 1000; // 2 minutes — batch reactions before waking up
 const SYNC_CHECK_INTERVAL_MS = 3 * 60 * 1000; // Check sync health every 3 minutes
+const CACHE_KEEPALIVE_INTERVAL_MS = 5 * 60 * 1000; // Touch cache every 5 min to prevent TTL expiry during long waits
 const DATA_DIR = process.env.MATRIX_DATA_DIR ?? path.join(process.cwd(), ".data");
 mkdirSync(DATA_DIR, { recursive: true });
 const STATE_FILE = path.join(DATA_DIR, "sync-state.json");
+
+// Concurrency guard: only one wait-for-messages can be active at a time.
+// Multiple concurrent calls corrupt shared state (listeners, cursor, sync token).
+let activeWaitResolve: (() => void) | null = null;
 
 // Internal cursor: tracks the last message we returned, so the catch-up scan
 // works even when the caller doesn't pass a `since` token.
@@ -79,6 +86,26 @@ export const waitForMessagesHandler = async (
   { roomId, timeoutMs, since }: { roomId?: string; timeoutMs: number; since?: string },
   { requestInfo, authInfo }: any
 ) => {
+  // Concurrency guard: reject if another wait is already active.
+  if (activeWaitResolve) {
+    return {
+      content: [
+        {
+          type: "text" as const,
+          text: JSON.stringify({
+            status: "already_listening",
+            message: "Another wait-for-messages call is already active. Only one listener at a time is supported.",
+            ...(lastSeenEventId ? { since: `${lastSeenEventId}|${lastSeenTimestamp}` } : {}),
+          }),
+        },
+      ],
+    };
+  }
+
+  // Acquire the guard — released in finally block.
+  activeWaitResolve = () => {};
+  const releaseGuard = () => { activeWaitResolve = null; };
+
   const { matrixUserId, homeserverUrl } = getMatrixContext(requestInfo?.headers);
   const accessToken = getAccessToken(requestInfo?.headers, authInfo?.token);
 
@@ -101,7 +128,18 @@ export const waitForMessagesHandler = async (
   }
 
   try {
-    const client = await createConfiguredMatrixClient(homeserverUrl, matrixUserId, accessToken, persistedSyncToken);
+    let client = await createConfiguredMatrixClient(homeserverUrl, matrixUserId, accessToken, persistedSyncToken);
+
+    // If the sync connection is unhealthy (RECONNECTING/ERROR/STOPPED), force a fresh client.
+    // A stale RECONNECTING client may never recover and silently misses all live events.
+    const initialSyncState = client.getSyncState();
+    if (initialSyncState && initialSyncState !== "SYNCING" && initialSyncState !== "PREPARED") {
+      console.error(`[wait-for-messages] Sync unhealthy (${initialSyncState}), forcing fresh client`);
+      updateSyncToken(client.store.getSyncToken());
+      removeClientFromCache(matrixUserId, homeserverUrl);
+      client = await createConfiguredMatrixClient(homeserverUrl, matrixUserId, accessToken, persistedSyncToken);
+    }
+
     const ownUserId = client.getUserId();
 
     // Persist the current sync token so the next client creation can resume from here.
@@ -241,17 +279,27 @@ export const waitForMessagesHandler = async (
 
       const syncCheckHandle = setInterval(() => {
         const state = client.getSyncState();
-        if (state === "STOPPED" || state === null) {
+        // Catch all unhealthy states: STOPPED, ERROR, RECONNECTING, null.
+        // RECONNECTING for 3+ min (the check interval) means the connection is stuck.
+        if (state === "STOPPED" || state === null || state === "ERROR" || state === "RECONNECTING") {
+          console.error(`[wait-for-messages] Sync unhealthy during wait (${state}), resolving as stale`);
           cleanup();
           resolve({ messages: collected, reactions: [...collectedReactions, ...liveReactions], timedOut: false, syncStale: true });
         }
       }, SYNC_CHECK_INTERVAL_MS);
+
+      // Keep the client cache alive during long waits by periodically touching lastAccessed.
+      // Without this, the 15-min cache TTL can expire mid-wait, killing the sync connection.
+      const cacheKeepAliveHandle = setInterval(() => {
+        getCachedClient(matrixUserId, homeserverUrl);
+      }, CACHE_KEEPALIVE_INTERVAL_MS);
 
       function cleanup() {
         client.removeListener(RoomEvent.Timeline, onEvent);
         client.removeListener(ClientEvent.Room, onRoom);
         clearTimeout(timeoutHandle);
         clearInterval(syncCheckHandle);
+        clearInterval(cacheKeepAliveHandle);
         if (debounceTimer) clearTimeout(debounceTimer);
         if (reactionDebounceTimer) clearTimeout(reactionDebounceTimer);
       }
@@ -336,6 +384,13 @@ export const waitForMessagesHandler = async (
     // Keep the sync token current after each wait cycle.
     updateSyncToken(client.store.getSyncToken());
 
+    // If sync went stale, proactively evict the cached client so the next call
+    // gets a fresh one immediately instead of needing two calls to recover.
+    if (result.syncStale) {
+      console.error("[wait-for-messages] Evicting stale client from cache for immediate recovery");
+      removeClientFromCache(matrixUserId, homeserverUrl);
+    }
+
     // Build continuation token from the last message (reactions don't advance cursor)
     let nextSince: string | undefined;
     if (result.messages.length > 0) {
@@ -356,6 +411,10 @@ export const waitForMessagesHandler = async (
       timestamp: new Date(r.timestamp).toISOString(),
     })) } : {};
 
+    // Include sync diagnostics on non-message responses for debugging reliability issues.
+    const syncState = client.getSyncState();
+    const syncDiag = syncState !== "SYNCING" ? { syncState: syncState ?? "null" } : {};
+
     if (result.messages.length === 0) {
       return {
         content: [
@@ -368,6 +427,7 @@ export const waitForMessagesHandler = async (
               ...(pendingInvites.length > 0 ? { invites: pendingInvites } : {}),
               ...reactionPayload,
               ...(nextSince ? { since: nextSince } : {}),
+              ...syncDiag,
             }),
           },
         ],
@@ -401,7 +461,7 @@ export const waitForMessagesHandler = async (
     };
   } catch (error: any) {
     console.error(`Failed in wait-for-messages: ${error.message}`);
-    removeClientFromCache(matrixUserId, homeserverUrl);
+    if (shouldEvictClientCache(error)) removeClientFromCache(matrixUserId, homeserverUrl);
     return {
       content: [
         {
@@ -411,6 +471,9 @@ export const waitForMessagesHandler = async (
       ],
       isError: true,
     };
+  } finally {
+    // Always release the concurrency guard.
+    releaseGuard!();
   }
 };
 

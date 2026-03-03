@@ -2,6 +2,7 @@ import { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { createConfiguredMatrixClient, getAccessToken, getMatrixContext } from "../../utils/server-helpers.js";
 import { removeClientFromCache } from "../../matrix/client.js";
+import { shouldEvictClientCache } from "../../utils/matrix-errors.js";
 import { ToolRegistrationFunction } from "../../types/tool-types.js";
 
 // Tool: Get user profile
@@ -60,7 +61,7 @@ Shared Rooms (up to 5): ${
     };
   } catch (error: any) {
     console.error(`Failed to get user profile: ${error.message}`);
-    removeClientFromCache(matrixUserId, homeserverUrl);
+    if (shouldEvictClientCache(error)) removeClientFromCache(matrixUserId, homeserverUrl);
     return {
       content: [
         {
@@ -138,7 +139,7 @@ ${deviceInfo}`,
     };
   } catch (error: any) {
     console.error(`Failed to get my profile: ${error.message}`);
-    removeClientFromCache(matrixUserId, homeserverUrl);
+    if (shouldEvictClientCache(error)) removeClientFromCache(matrixUserId, homeserverUrl);
     return {
       content: [
         {
@@ -175,7 +176,7 @@ export const getAllUsersHandler = async (_input: any, { requestInfo, authInfo }:
     };
   } catch (error: any) {
     console.error(`Failed to get all users: ${error.message}`);
-    removeClientFromCache(matrixUserId, homeserverUrl);
+    if (shouldEvictClientCache(error)) removeClientFromCache(matrixUserId, homeserverUrl);
     return {
       content: [
         {

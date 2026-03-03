@@ -2,6 +2,7 @@ import { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { createConfiguredMatrixClient, getAccessToken, getMatrixContext } from "../../utils/server-helpers.js";
 import { removeClientFromCache } from "../../matrix/client.js";
+import { shouldEvictClientCache } from "../../utils/matrix-errors.js";
 import { ToolRegistrationFunction } from "../../types/tool-types.js";
 
 // Tool: List joined rooms
@@ -21,7 +22,7 @@ export const listJoinedRoomsHandler = async (_input: any, { requestInfo, authInf
     };
   } catch (error: any) {
     console.error(`Failed to list joined rooms: ${error.message}`);
-    removeClientFromCache(matrixUserId, homeserverUrl);
+    if (shouldEvictClientCache(error)) removeClientFromCache(matrixUserId, homeserverUrl);
     return {
       content: [
         {
@@ -84,7 +85,7 @@ Created: ${createdAt}`,
     };
   } catch (error: any) {
     console.error(`Failed to get room info: ${error.message}`);
-    removeClientFromCache(matrixUserId, homeserverUrl);
+    if (shouldEvictClientCache(error)) removeClientFromCache(matrixUserId, homeserverUrl);
     return {
       content: [
         {
@@ -139,7 +140,7 @@ export const getRoomMembersHandler = async ({ roomId }: { roomId: string }, { re
     };
   } catch (error: any) {
     console.error(`Failed to get room members: ${error.message}`);
-    removeClientFromCache(matrixUserId, homeserverUrl);
+    if (shouldEvictClientCache(error)) removeClientFromCache(matrixUserId, homeserverUrl);
     return {
       content: [
         {

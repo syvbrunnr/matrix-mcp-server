@@ -2,6 +2,7 @@ import { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { createConfiguredMatrixClient, getAccessToken, getMatrixContext } from "../../utils/server-helpers.js";
 import { removeClientFromCache } from "../../matrix/client.js";
+import { shouldEvictClientCache } from "../../utils/matrix-errors.js";
 import { ToolRegistrationFunction } from "../../types/tool-types.js";
 
 // Tool: Send message
@@ -127,7 +128,7 @@ Message type: ${messageType}${extras ? ` (${extras})` : ""}`,
     };
   } catch (error: any) {
     console.error(`Failed to send message: ${error.message}`);
-    removeClientFromCache(matrixUserId, homeserverUrl);
+    if (shouldEvictClientCache(error)) removeClientFromCache(matrixUserId, homeserverUrl);
     return {
       content: [
         {
@@ -218,7 +219,7 @@ ${!dmRoom ? "New DM room created" : "Used existing DM room"}`,
     };
   } catch (error: any) {
     console.error(`Failed to send direct message: ${error.message}`);
-    removeClientFromCache(matrixUserId, homeserverUrl);
+    if (shouldEvictClientCache(error)) removeClientFromCache(matrixUserId, homeserverUrl);
     
     // Provide more specific error messages
     let errorMessage = `Error: Failed to send direct message - ${error.message}`;

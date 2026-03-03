@@ -1,5 +1,6 @@
 import { createConfiguredMatrixClient, getAccessToken, getMatrixContext } from "../../utils/server-helpers.js";
 import { removeClientFromCache } from "../../matrix/client.js";
+import { shouldEvictClientCache } from "../../utils/matrix-errors.js";
 import { ToolRegistrationFunction } from "../../types/tool-types.js";
 
 export const registerInviteTools: ToolRegistrationFunction = (server) => {
@@ -41,7 +42,7 @@ export const registerInviteTools: ToolRegistrationFunction = (server) => {
         };
       } catch (error: any) {
         console.error(`Failed to get pending invites: ${error.message}`);
-        removeClientFromCache(matrixUserId, homeserverUrl);
+        if (shouldEvictClientCache(error)) removeClientFromCache(matrixUserId, homeserverUrl);
         return {
           content: [{ type: "text" as const, text: `Error: Failed to get pending invites - ${error.message}` }],
           isError: true,

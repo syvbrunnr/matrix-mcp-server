@@ -2,6 +2,7 @@ import { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { createConfiguredMatrixClient, getAccessToken, getMatrixContext } from "../../utils/server-helpers.js";
 import { removeClientFromCache } from "../../matrix/client.js";
+import { shouldEvictClientCache } from "../../utils/matrix-errors.js";
 import { ToolRegistrationFunction } from "../../types/tool-types.js";
 
 // Tool: Create room
@@ -97,7 +98,7 @@ Invited users: ${inviteUsers && inviteUsers.length > 0 ? inviteUsers.join(", ") 
     };
   } catch (error: any) {
     console.error(`Failed to create room: ${error.message}`);
-    removeClientFromCache(matrixUserId, homeserverUrl);
+    if (shouldEvictClientCache(error)) removeClientFromCache(matrixUserId, homeserverUrl);
     
     // Provide more specific error messages
     let errorMessage = `Error: Failed to create room "${roomName}" - ${error.message}`;
@@ -170,7 +171,7 @@ ${roomIdOrAlias !== roomId ? `Joined via alias: ${roomIdOrAlias}` : ""}`,
     };
   } catch (error: any) {
     console.error(`Failed to join room: ${error.message}`);
-    removeClientFromCache(matrixUserId, homeserverUrl);
+    if (shouldEvictClientCache(error)) removeClientFromCache(matrixUserId, homeserverUrl);
     
     // Provide more specific error messages
     let errorMessage = `Error: Failed to join room ${roomIdOrAlias} - ${error.message}`;
@@ -232,8 +233,12 @@ export const leaveRoomHandler = async (
       };
     }
 
-    // Leave the room
-    await client.leave(roomId);
+    // Leave the room — SDK's leave() doesn't accept reason, use membershipChange directly
+    if (reason) {
+      await (client as any).membershipChange(roomId, undefined, "leave", reason);
+    } else {
+      await client.leave(roomId);
+    }
 
     return {
       content: [
@@ -246,7 +251,7 @@ Room ID: ${roomId}${reason ? `\nReason: ${reason}` : ""}`,
     };
   } catch (error: any) {
     console.error(`Failed to leave room: ${error.message}`);
-    removeClientFromCache(matrixUserId, homeserverUrl);
+    if (shouldEvictClientCache(error)) removeClientFromCache(matrixUserId, homeserverUrl);
     
     // Provide more specific error messages
     let errorMessage = `Error: Failed to leave room ${roomId} - ${error.message}`;
@@ -361,7 +366,7 @@ The user will receive an invitation and can choose to join the room.`,
     };
   } catch (error: any) {
     console.error(`Failed to invite user: ${error.message}`);
-    removeClientFromCache(matrixUserId, homeserverUrl);
+    if (shouldEvictClientCache(error)) removeClientFromCache(matrixUserId, homeserverUrl);
     
     // Provide more specific error messages
     let errorMessage = `Error: Failed to invite ${targetUserId} to room ${roomId} - ${error.message}`;

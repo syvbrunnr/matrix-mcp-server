@@ -85,13 +85,15 @@ export async function createMatrixClient(
   const timedFetch = async (input: any, init?: any) => {
     // Use longer timeout for /sync long-poll requests
     const url = typeof input === "string" ? input : input?.url ?? "";
-    const timeoutMs = url.includes("/_matrix/client") && url.includes("/sync")
-      ? SYNC_FETCH_TIMEOUT_MS
-      : FETCH_TIMEOUT_MS;
+    const isSync = url.includes("/_matrix/client") && url.includes("/sync");
+    const timeoutMs = isSync ? SYNC_FETCH_TIMEOUT_MS : FETCH_TIMEOUT_MS;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
       return await fetch(input, { ...(init || {}), agent: httpsAgent, signal: controller.signal as any }) as any;
+    } catch (err: any) {
+      if (isSync) console.error(`[Sync] /sync fetch failed: ${err.message}`);
+      throw err;
     } finally {
       clearTimeout(timer);
     }
@@ -205,7 +207,10 @@ export async function createMatrixClient(
       console.error(`[Sync] Resuming from stored sync token`);
     }
 
-    await client.startClient({ initialSyncLimit: 20 });
+    // pollTimeout: server-side /sync long-poll timeout. Default is 30s, but reverse
+    // proxies often have short idle timeouts that race with it. 10s is conservative
+    // but ensures the /sync response arrives before any proxy kills the connection.
+    await client.startClient({ initialSyncLimit: 20, pollTimeout: 10_000 });
 
     // Wait for the initial sync to complete (with 30s timeout to prevent indefinite hangs)
     const SYNC_TIMEOUT_MS = 30_000;

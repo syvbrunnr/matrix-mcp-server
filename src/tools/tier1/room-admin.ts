@@ -2,6 +2,7 @@ import { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { createConfiguredMatrixClient, getAccessToken, getMatrixContext } from "../../utils/server-helpers.js";
 import { removeClientFromCache } from "../../matrix/client.js";
+import { shouldEvictClientCache } from "../../utils/matrix-errors.js";
 import { ToolRegistrationFunction } from "../../types/tool-types.js";
 
 // Tool: Set room name
@@ -64,7 +65,7 @@ New name: ${roomName}`,
     };
   } catch (error: any) {
     console.error(`Failed to set room name: ${error.message}`);
-    removeClientFromCache(matrixUserId, homeserverUrl);
+    if (shouldEvictClientCache(error)) removeClientFromCache(matrixUserId, homeserverUrl);
     
     // Provide more specific error messages
     let errorMessage = `Error: Failed to set room name to "${roomName}" - ${error.message}`;
@@ -149,7 +150,7 @@ New topic: ${topic}`,
     };
   } catch (error: any) {
     console.error(`Failed to set room topic: ${error.message}`);
-    removeClientFromCache(matrixUserId, homeserverUrl);
+    if (shouldEvictClientCache(error)) removeClientFromCache(matrixUserId, homeserverUrl);
     
     // Provide more specific error messages
     let errorMessage = `Error: Failed to set room topic - ${error.message}`;

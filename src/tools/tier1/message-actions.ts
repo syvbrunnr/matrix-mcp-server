@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { createConfiguredMatrixClient, getAccessToken, getMatrixContext } from "../../utils/server-helpers.js";
 import { removeClientFromCache } from "../../matrix/client.js";
+import { shouldEvictClientCache } from "../../utils/matrix-errors.js";
 import { ToolRegistrationFunction } from "../../types/tool-types.js";
 
 // Tool: Redact (delete) a message
@@ -26,7 +27,7 @@ export const redactEventHandler = async (
     };
   } catch (error: any) {
     console.error(`Failed to redact event: ${error.message}`);
-    removeClientFromCache(matrixUserId, homeserverUrl);
+    if (shouldEvictClientCache(error)) removeClientFromCache(matrixUserId, homeserverUrl);
     return {
       content: [{ type: "text" as const, text: `Error: Failed to redact event - ${error.message}` }],
       isError: true,
@@ -63,7 +64,7 @@ export const sendReactionHandler = async (
     };
   } catch (error: any) {
     console.error(`Failed to send reaction: ${error.message}`);
-    removeClientFromCache(matrixUserId, homeserverUrl);
+    if (shouldEvictClientCache(error)) removeClientFromCache(matrixUserId, homeserverUrl);
     return {
       content: [{ type: "text" as const, text: `Error: Failed to send reaction - ${error.message}` }],
       isError: true,
@@ -105,7 +106,7 @@ export const editMessageHandler = async (
     };
   } catch (error: any) {
     console.error(`Failed to edit message: ${error.message}`);
-    removeClientFromCache(matrixUserId, homeserverUrl);
+    if (shouldEvictClientCache(error)) removeClientFromCache(matrixUserId, homeserverUrl);
     return {
       content: [{ type: "text" as const, text: `Error: Failed to edit message - ${error.message}` }],
       isError: true,

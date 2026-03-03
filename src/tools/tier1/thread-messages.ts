@@ -2,6 +2,7 @@ import { z } from "zod";
 import { EventType } from "matrix-js-sdk";
 import { createConfiguredMatrixClient, getAccessToken, getMatrixContext } from "../../utils/server-helpers.js";
 import { removeClientFromCache } from "../../matrix/client.js";
+import { shouldEvictClientCache } from "../../utils/matrix-errors.js";
 import { ToolRegistrationFunction } from "../../types/tool-types.js";
 
 // Rel types to try, in preference order (Dendrite uses io.element.thread)
@@ -128,7 +129,7 @@ export const registerThreadMessageTools: ToolRegistrationFunction = (server) => 
         };
       } catch (error: any) {
         console.error(`Failed to get thread messages: ${error.message}`);
-        removeClientFromCache(matrixUserId, homeserverUrl);
+        if (shouldEvictClientCache(error)) removeClientFromCache(matrixUserId, homeserverUrl);
         return {
           content: [{ type: "text" as const, text: `Error: Failed to get thread messages - ${error.message}` }],
           isError: true,
