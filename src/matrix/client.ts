@@ -254,6 +254,14 @@ export async function createMatrixClient(
       ),
     ]);
 
+    // Set presence to online so other users can see the bot is active.
+    // The homeserver automatically marks offline when /sync stops (e.g., laptop closed).
+    try {
+      await client.setPresence({ presence: "online" });
+    } catch (_) {
+      // Presence may not be supported by all homeservers (e.g., Dendrite)
+    }
+
     // Cache the successfully created and synced client
     cacheClient(client, userId, homeserverUrl);
     
