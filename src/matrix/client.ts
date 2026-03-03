@@ -166,7 +166,10 @@ export async function createMatrixClient(
     // identity and break trust with all previously verified devices.
     const matrixPassword = process.env.MATRIX_PASSWORD;
     if (matrixPassword) {
+      const PHASE2_TIMEOUT_MS = 15_000;
       try {
+        await Promise.race([
+          (async () => {
         const crypto = client.getCrypto();
         if (crypto) {
           // Load or generate a recovery key for SSSS.
@@ -208,9 +211,16 @@ export async function createMatrixClient(
             }
             if (!restored) {
               // SSSS restore didn't work (e.g., recovery key mismatch after migration,
-              // or SSSS contains stale keys from old broken bootstrap). Create fresh
-              // cross-signing keys — this replaces the broken server-side identity.
-              console.error("[E2EE] SSSS restore failed to recover private keys. Creating fresh cross-signing.");
+              // or SSSS contains stale keys from old broken bootstrap). Replace SSSS
+              // first (so cross-signing can store keys), then create fresh cross-signing.
+              console.error("[E2EE] SSSS restore failed. Resetting SSSS then creating fresh cross-signing.");
+              await crypto.bootstrapSecretStorage({
+                setupNewSecretStorage: true,
+                createSecretStorageKey: async () => ({
+                  keyInfo: {},
+                  privateKey: recoveryKeyBytes,
+                }),
+              });
               await crypto.bootstrapCrossSigning({
                 authUploadDeviceSigningKeys: async (makeRequest) => {
                   await makeRequest({
@@ -219,12 +229,6 @@ export async function createMatrixClient(
                     password: matrixPassword,
                   });
                 },
-              });
-              await crypto.bootstrapSecretStorage({
-                createSecretStorageKey: async () => ({
-                  keyInfo: {},
-                  privateKey: recoveryKeyBytes,
-                }),
               });
             }
           } else {
@@ -247,12 +251,65 @@ export async function createMatrixClient(
             });
           }
 
+          // Verify the local device is cross-signed. bootstrapCrossSigning only
+          // signs the device when CREATING new keys — SSSS restore skips this step.
+          const myDeviceId = client.getDeviceId();
+          if (myDeviceId) {
+            const devStatus = await crypto.getDeviceVerificationStatus(userId, myDeviceId);
+            if (devStatus && !devStatus.crossSigningVerified) {
+              console.error("[E2EE] Device not cross-signed after bootstrap, signing now...");
+              // Re-run bootstrap with auth to force device signing
+              await crypto.bootstrapCrossSigning({
+                authUploadDeviceSigningKeys: async (makeRequest) => {
+                  await makeRequest({
+                    type: "m.login.password",
+                    identifier: { type: "m.id.user", user: userId },
+                    password: matrixPassword,
+                  });
+                },
+              });
+              const afterSign = await crypto.getDeviceVerificationStatus(userId, myDeviceId);
+              console.error("[E2EE] Device cross-signed after fix: %s", afterSign?.crossSigningVerified);
+            } else {
+              console.error("[E2EE] Device already cross-signed: %s", devStatus?.crossSigningVerified);
+            }
+          }
+
           await crypto.checkKeyBackupAndEnable();
-          console.error("[E2EE] Phase 2 complete: cross-signing status: %j",
-            await crypto.getCrossSigningStatus());
+          const finalCrossSigningStatus = await crypto.getCrossSigningStatus();
+          console.error("[E2EE] Phase 2 complete: cross-signing status: %j", finalCrossSigningStatus);
+          // Write diagnostic file so we can check status without seeing stderr
+          const diagPath = path.join(DATA_DIR, "e2ee-diagnostic.json");
+          const myDiagDeviceId = client.getDeviceId();
+          let diagDevStatus: any = null;
+          if (myDiagDeviceId) {
+            try {
+              diagDevStatus = await crypto.getDeviceVerificationStatus(userId, myDiagDeviceId);
+            } catch (e: any) {
+              diagDevStatus = { error: e.message };
+            }
+          }
+          writeFileSync(diagPath, JSON.stringify({
+            timestamp: new Date().toISOString(),
+            userId,
+            deviceId: myDiagDeviceId,
+            crossSigningStatus: finalCrossSigningStatus,
+            deviceVerificationStatus: diagDevStatus,
+          }, null, 2));
         }
+        })(),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error(`Phase 2 timed out after ${PHASE2_TIMEOUT_MS / 1000}s`)), PHASE2_TIMEOUT_MS)
+          ),
+        ]);
       } catch (e: any) {
         console.warn("[E2EE] Phase 2 bootstrap failed (non-fatal):", e.message);
+        const diagPath = path.join(DATA_DIR, "e2ee-diagnostic.json");
+        writeFileSync(diagPath, JSON.stringify({
+          timestamp: new Date().toISOString(),
+          phase2Error: e.message,
+          stack: e.stack?.split("\n").slice(0, 5),
+        }, null, 2));
       }
     }
 
