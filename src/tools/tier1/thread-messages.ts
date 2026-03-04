@@ -68,8 +68,10 @@ export const registerThreadMessageTools: ToolRegistrationFunction = (server) => 
           if (room) {
             const timelineEvents = room.getLiveTimeline().getEvents();
             allEvents = timelineEvents.filter((event) => {
-              if (event.getType() !== EventType.RoomMessage) return false;
-              const relatesTo = event.getContent()?.["m.relates_to"];
+              const evtType = event.getType();
+              if (evtType !== EventType.RoomMessage && evtType !== EventType.RoomMessageEncrypted) return false;
+              const content = event.getClearContent?.() || event.getContent();
+              const relatesTo = content?.["m.relates_to"];
               return (
                 (relatesTo?.rel_type === "io.element.thread" || relatesTo?.rel_type === "m.thread") &&
                 relatesTo?.event_id === threadRootEventId
@@ -104,19 +106,22 @@ export const registerThreadMessageTools: ToolRegistrationFunction = (server) => 
         }
 
         for (const event of allEvents) {
-          const content = event.getContent();
-          if (content?.msgtype !== "m.text") continue;
-          const relatesTo = content["m.relates_to"];
-          messages.push(JSON.stringify({
+          const content = event.getClearContent?.() || event.getContent();
+          const isEncrypted = event.getType() === EventType.RoomMessageEncrypted;
+          if (!isEncrypted && content?.msgtype !== "m.text") continue;
+          const relatesTo = content?.["m.relates_to"];
+          const metadata: Record<string, any> = {
             eventId: event.getId(),
             sender: event.getSender(),
             timestamp: new Date(event.getTs()).toISOString(),
-            body: String(content.body || ""),
+            body: String(content?.body || (isEncrypted ? "[encrypted]" : "")),
             threadRootEventId,
-            ...(relatesTo?.["m.in_reply_to"]?.event_id
-              ? { replyToEventId: relatesTo["m.in_reply_to"].event_id }
-              : {}),
-          }));
+          };
+          if (isEncrypted && !content?.body) metadata.decryptionFailed = true;
+          if (relatesTo?.["m.in_reply_to"]?.event_id) {
+            metadata.replyToEventId = relatesTo["m.in_reply_to"].event_id;
+          }
+          messages.push(JSON.stringify(metadata));
         }
 
         if (messages.length === 0) {

@@ -19,7 +19,11 @@ const STATE_FILE = path.join(DATA_DIR, "sync-state.json");
 
 // Concurrency guard: only one wait-for-messages can be active at a time.
 // Multiple concurrent calls corrupt shared state (listeners, cursor, sync token).
+// Dead-man switch: auto-releases after GUARD_MAX_TTL_MS to prevent permanent lockout
+// from orphaned guards (e.g., unhandled rejection in Promise chain).
 let activeWaitResolve: (() => void) | null = null;
+let guardAcquiredAt = 0;
+const GUARD_MAX_TTL_MS = 10 * 60 * 1000; // 10 min absolute max
 
 // Internal cursor: tracks the last message we returned, so the catch-up scan
 // works even when the caller doesn't pass a `since` token.
@@ -82,28 +86,81 @@ interface CollectedReaction {
   timestamp: number;
 }
 
+/**
+ * Extracts a CollectedMessage from a Matrix event, or null if the event should be skipped.
+ * Shared between catch-up scan and live listener to avoid duplicated filtering logic.
+ */
+function extractMessage(
+  event: MatrixEvent,
+  ownUserId: string | null,
+  sinceTs: number,
+  sinceEventId: string | undefined,
+  seenEventIds: Set<string>,
+  dmRoomIds: Set<string>,
+  client: any,
+): CollectedMessage | null {
+  const evtType = event.getType();
+  if (evtType !== EventType.RoomMessage && evtType !== EventType.RoomMessageEncrypted) return null;
+  if (event.getSender() === ownUserId) return null;
+
+  const ts = event.getTs();
+  const eid = event.getId();
+  if (ts < sinceTs) return null;
+  if (ts === sinceTs && eid === sinceEventId) return null;
+
+  const content = event.getClearContent?.() || event.getContent();
+  const relatesTo = content?.["m.relates_to"];
+  if (relatesTo?.rel_type === "m.replace") return null;
+  if (event.isRedacted()) return null;
+
+  if (!eid || seenEventIds.has(eid)) return null;
+  seenEventIds.add(eid);
+
+  const evtRoomId = event.getRoomId() || "";
+  const room = client.getRoom(evtRoomId);
+  return {
+    roomId: evtRoomId,
+    roomName: room?.name || evtRoomId,
+    sender: event.getSender() || "",
+    body: String(content?.body || (evtType === EventType.RoomMessageEncrypted ? "[encrypted]" : "")),
+    eventId: eid,
+    timestamp: ts,
+    isDM: dmRoomIds.has(evtRoomId),
+    threadRootEventId: relatesTo?.rel_type === "io.element.thread" || relatesTo?.rel_type === "m.thread"
+      ? relatesTo.event_id : undefined,
+    replyToEventId: relatesTo?.["m.in_reply_to"]?.event_id,
+  };
+}
+
 export const waitForMessagesHandler = async (
   { roomId, timeoutMs, since }: { roomId?: string; timeoutMs: number; since?: string },
   { requestInfo, authInfo }: any
 ) => {
   // Concurrency guard: reject if another wait is already active.
+  // Dead-man switch: if guard has been held longer than GUARD_MAX_TTL_MS, force-release it.
   if (activeWaitResolve) {
-    return {
-      content: [
-        {
-          type: "text" as const,
-          text: JSON.stringify({
-            status: "already_listening",
-            message: "Another wait-for-messages call is already active. Only one listener at a time is supported.",
-            ...(lastSeenEventId ? { since: `${lastSeenEventId}|${lastSeenTimestamp}` } : {}),
-          }),
-        },
-      ],
-    };
+    const heldMs = Date.now() - guardAcquiredAt;
+    if (heldMs < GUARD_MAX_TTL_MS) {
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify({
+              status: "already_listening",
+              message: "Another wait-for-messages call is already active. Only one listener at a time is supported.",
+              ...(lastSeenEventId ? { since: `${lastSeenEventId}|${lastSeenTimestamp}` } : {}),
+            }),
+          },
+        ],
+      };
+    }
+    console.error(`[wait-for-messages] Guard held for ${Math.round(heldMs / 1000)}s — dead-man switch releasing`);
+    activeWaitResolve = null;
   }
 
   // Acquire the guard — released in finally block.
   activeWaitResolve = () => {};
+  guardAcquiredAt = Date.now();
   const releaseGuard = () => { activeWaitResolve = null; };
 
   const { matrixUserId, homeserverUrl } = getMatrixContext(requestInfo?.headers);
@@ -239,55 +296,23 @@ export const waitForMessagesHandler = async (
           return;
         }
 
-        // Only m.room.message and m.room.encrypted events from here
-        const evtType = rawType;
-        if (evtType !== EventType.RoomMessage && evtType !== EventType.RoomMessageEncrypted) {
-          if (liveModeActive) debugDropReasons[`type:${rawType}`] = (debugDropReasons[`type:${rawType}`] || 0) + 1;
+        // Use shared extraction logic for message events
+        const msg = extractMessage(event, ownUserId, catchupSinceTs, catchupSinceId, seenEventIds, dmRoomIds, client);
+        if (!msg) {
+          // Track why we dropped it (only in live mode to avoid catch-up noise)
+          if (liveModeActive) {
+            const evtType = rawType;
+            if (evtType !== EventType.RoomMessage && evtType !== EventType.RoomMessageEncrypted) {
+              debugDropReasons[`type:${rawType}`] = (debugDropReasons[`type:${rawType}`] || 0) + 1;
+            } else if (event.getSender() === ownUserId) {
+              debugDropReasons["own_message"] = (debugDropReasons["own_message"] || 0) + 1;
+            } else {
+              debugDropReasons["filtered"] = (debugDropReasons["filtered"] || 0) + 1;
+            }
+          }
           return;
         }
-        if (event.getSender() === ownUserId) {
-          if (liveModeActive) debugDropReasons["own_message"] = (debugDropReasons["own_message"] || 0) + 1;
-          return;
-        }
-
-        // Skip events at or before the catch-up baseline
-        const ts = event.getTs();
-        const eid = event.getId();
-        if (ts < catchupSinceTs) {
-          if (liveModeActive) debugDropReasons["before_cursor"] = (debugDropReasons["before_cursor"] || 0) + 1;
-          return;
-        }
-        if (ts === catchupSinceTs && eid === catchupSinceId) {
-          if (liveModeActive) debugDropReasons["at_cursor"] = (debugDropReasons["at_cursor"] || 0) + 1;
-          return;
-        }
-
-        // For encrypted events, try to use decrypted content if available
-        const content = event.getClearContent?.() || event.getContent();
-        const relatesTo = content?.["m.relates_to"];
-        if (relatesTo?.rel_type === "m.replace") return;
-        if (event.isRedacted()) return;
-
-        // Dedup: the catch-up scan and live listener share seenEventIds
-        if (!eid || seenEventIds.has(eid)) {
-          if (liveModeActive) debugDropReasons["dedup"] = (debugDropReasons["dedup"] || 0) + 1;
-          return;
-        }
-        seenEventIds.add(eid);
-
-        const room = evtRoomId ? client.getRoom(evtRoomId) : null;
-        collected.push({
-          roomId: evtRoomId || "",
-          roomName: room?.name || evtRoomId || "",
-          sender: event.getSender() || "",
-          body: String(content?.body || (evtType === EventType.RoomMessageEncrypted ? "[encrypted]" : "")),
-          eventId: eid,
-          timestamp: ts,
-          isDM: dmRoomIds.has(evtRoomId || ""),
-          threadRootEventId: relatesTo?.rel_type === "io.element.thread" || relatesTo?.rel_type === "m.thread"
-            ? relatesTo.event_id : undefined,
-          replyToEventId: relatesTo?.["m.in_reply_to"]?.event_id,
-        });
+        collected.push(msg);
 
         if (!liveModeActive) return; // collected during catch-up scan; resolve handled below
 
@@ -417,30 +442,8 @@ export const waitForMessagesHandler = async (
               continue;
             }
 
-            const scanEvtType = event.getType();
-            if (scanEvtType !== EventType.RoomMessage && scanEvtType !== EventType.RoomMessageEncrypted) continue;
-            if (event.getSender() === ownUserId) continue;
-
-            // For encrypted events, try to use decrypted content if available
-            const content = event.getClearContent?.() || event.getContent();
-            const relatesTo = content?.["m.relates_to"];
-            if (relatesTo?.rel_type === "m.replace") continue;
-            if (event.isRedacted()) continue;
-
-            if (!eid || seenEventIds.has(eid)) continue;
-            seenEventIds.add(eid);
-            collected.push({
-              roomId: event.getRoomId() || "",
-              roomName: room.name || event.getRoomId() || "",
-              sender: event.getSender() || "",
-              body: String(content?.body || (scanEvtType === EventType.RoomMessageEncrypted ? "[encrypted]" : "")),
-              eventId: eid,
-              timestamp: ts,
-              isDM: dmRoomIds.has(event.getRoomId() || ""),
-              threadRootEventId: relatesTo?.rel_type === "io.element.thread" || relatesTo?.rel_type === "m.thread"
-                ? relatesTo.event_id : undefined,
-              replyToEventId: relatesTo?.["m.in_reply_to"]?.event_id,
-            });
+            const msg = extractMessage(event, ownUserId, catchupSinceTs, catchupSinceId, seenEventIds, dmRoomIds, client);
+            if (msg) collected.push(msg);
           }
         }
 
