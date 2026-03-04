@@ -417,6 +417,7 @@ export const registerRoomManagementTools: ToolRegistrationFunction = (server) =>
           .optional()
           .describe("Optional room alias (e.g., 'my-room' for #my-room:domain.com)"),
       },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
     },
     createRoomHandler
   );
@@ -432,6 +433,7 @@ export const registerRoomManagementTools: ToolRegistrationFunction = (server) =>
           .string()
           .describe("Room ID (e.g., !roomid:domain.com) or room alias (e.g., #roomalias:domain.com)"),
       },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },
     joinRoomHandler
   );
@@ -449,6 +451,7 @@ export const registerRoomManagementTools: ToolRegistrationFunction = (server) =>
           .optional()
           .describe("Optional reason for leaving the room"),
       },
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
     },
     leaveRoomHandler
   );
@@ -465,6 +468,7 @@ export const registerRoomManagementTools: ToolRegistrationFunction = (server) =>
           .string()
           .describe("Target user's Matrix ID to invite (e.g., @user:domain.com)"),
       },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },
     inviteUserHandler
   );

@@ -10,6 +10,7 @@ export const registerServerAdminTools: ToolRegistrationFunction = (server) => {
         "The process exits cleanly; Claude Code restarts the subprocess automatically. " +
         "Use after modifying source files to reload the new code.",
       inputSchema: {},
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
     },
     async () => {
       // Send response first, then exit after a short delay

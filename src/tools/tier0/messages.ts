@@ -195,6 +195,7 @@ export const registerMessageTools: ToolRegistrationFunction = (server) => {
           .default(20)
           .describe("Maximum number of messages to retrieve (default: 20)"),
       },
+      annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
     },
     getRoomMessagesHandler
   );
@@ -217,6 +218,7 @@ export const registerMessageTools: ToolRegistrationFunction = (server) => {
           .string()
           .describe("End date in ISO 8601 format (e.g., 2024-01-02T00:00:00Z)"),
       },
+      annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
     },
     getMessagesByDateHandler
   );
@@ -234,6 +236,7 @@ export const registerMessageTools: ToolRegistrationFunction = (server) => {
           .default(10)
           .describe("Maximum number of active users to return (default: 10)"),
       },
+      annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
     },
     identifyActiveUsersHandler
   );

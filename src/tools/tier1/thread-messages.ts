@@ -27,6 +27,7 @@ export const registerThreadMessageTools: ToolRegistrationFunction = (server) => 
           .default(50)
           .describe("Maximum number of thread replies to return (default: 50)"),
       },
+      annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
     },
     async (
       { roomId, threadRootEventId, limit }: { roomId: string; threadRootEventId: string; limit: number },

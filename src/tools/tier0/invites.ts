@@ -13,6 +13,7 @@ export const registerInviteTools: ToolRegistrationFunction = (server) => {
         "Returns room ID, name, and who sent the invite. " +
         "Use join-room to accept an invite.",
       inputSchema: {},
+      annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
     },
     async (_input: any, { requestInfo, authInfo }: any) => {
       const { matrixUserId, homeserverUrl } = getMatrixContext(requestInfo?.headers);

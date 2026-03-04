@@ -202,6 +202,7 @@ export const registerUserTools: ToolRegistrationFunction = (server) => {
           .string()
           .describe("Target user's Matrix ID to get profile for (e.g., @user:domain.com)"),
       },
+      annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
     },
     getUserProfileHandler
   );
@@ -213,6 +214,7 @@ export const registerUserTools: ToolRegistrationFunction = (server) => {
       title: "Get My Matrix Profile",
       description: "Get your own profile information including display name, avatar, settings, and device list",
       inputSchema: {},
+      annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
     },
     getMyProfileHandler
   );
@@ -224,6 +226,7 @@ export const registerUserTools: ToolRegistrationFunction = (server) => {
       title: "Get All Known Users",
       description: "List all users known to the Matrix client, including their display names and user IDs",
       inputSchema: {},
+      annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
     },
     getAllUsersHandler
   );

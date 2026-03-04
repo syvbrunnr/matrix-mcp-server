@@ -1,4 +1,10 @@
 #!/usr/bin/env node
+/**
+ * Hot-reload architecture: outer process (wrapper) ↔ inner process (MCP server).
+ * On restart (exit code 0): PID stays stable, stdio stays attached, env vars survive.
+ * Re-initialized: Matrix SDK clients (fresh login + sync), MCP transport, tool list.
+ * Persists across restarts: SQLite crypto stores, sync tokens (if stored), env config.
+ */
 import "dotenv/config";
 import { spawn, ChildProcess } from "child_process";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";

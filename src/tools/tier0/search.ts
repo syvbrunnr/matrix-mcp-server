@@ -110,6 +110,7 @@ export const registerSearchTools: ToolRegistrationFunction = (server) => {
           .default(20)
           .describe("Maximum number of rooms to return (default: 20)"),
       },
+      annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
     },
     searchPublicRoomsHandler
   );

@@ -186,6 +186,7 @@ export const registerRoomAdminTools: ToolRegistrationFunction = (server) => {
         roomId: z.string().describe("Matrix room ID (e.g., !roomid:domain.com)"),
         roomName: z.string().describe("New name for the room"),
       },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
     setRoomNameHandler
   );
@@ -200,6 +201,7 @@ export const registerRoomAdminTools: ToolRegistrationFunction = (server) => {
         roomId: z.string().describe("Matrix room ID (e.g., !roomid:domain.com)"),
         topic: z.string().describe("New topic/description for the room"),
       },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
     setRoomTopicHandler
   );

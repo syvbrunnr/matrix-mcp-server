@@ -242,6 +242,7 @@ export const registerNotificationTools: ToolRegistrationFunction = (server) => {
           .optional()
           .describe("Optional room ID to get counts for specific room only"),
       },
+      annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
     },
     getNotificationCountsHandler
   );
@@ -259,6 +260,7 @@ export const registerNotificationTools: ToolRegistrationFunction = (server) => {
           .default(false)
           .describe("Include DM rooms with no recent messages (default: false)"),
       },
+      annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
     },
     getDirectMessagesHandler
   );

@@ -162,6 +162,7 @@ export const registerRoomTools: ToolRegistrationFunction = (server) => {
       title: "List Joined Matrix Rooms",
       description: "Get a list of all Matrix rooms the user has joined, including room names, IDs, and basic information",
       inputSchema: {},
+      annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
     },
     listJoinedRoomsHandler
   );
@@ -175,6 +176,7 @@ export const registerRoomTools: ToolRegistrationFunction = (server) => {
       inputSchema: {
         roomId: z.string().describe("Matrix room ID (e.g., !roomid:domain.com)"),
       },
+      annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
     },
     getRoomInfoHandler
   );
@@ -188,6 +190,7 @@ export const registerRoomTools: ToolRegistrationFunction = (server) => {
       inputSchema: {
         roomId: z.string().describe("Matrix room ID (e.g., !roomid:domain.com)"),
       },
+      annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
     },
     getRoomMembersHandler
   );

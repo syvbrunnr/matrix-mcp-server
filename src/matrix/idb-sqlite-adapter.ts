@@ -10,6 +10,9 @@
  * cursor.continue() queues a new request synchronously inside onsuccess, keeping
  * the transaction alive until iteration is complete.
  *
+ * Auto-commit uses setImmediate (not queueMicrotask) so WASM Waker continuations
+ * drain before the commit fires — see _scheduleCommit().
+ *
  * Schema: one SQLite file per IDB database, one SQLite table per object store.
  */
 

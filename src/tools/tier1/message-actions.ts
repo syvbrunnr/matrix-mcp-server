@@ -126,6 +126,7 @@ export const registerMessageActionTools: ToolRegistrationFunction = (server) => 
         eventId: z.string().describe("Event ID of the message to redact"),
         reason: z.string().optional().describe("Optional reason for the redaction"),
       },
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
     },
     redactEventHandler
   );
@@ -140,6 +141,7 @@ export const registerMessageActionTools: ToolRegistrationFunction = (server) => 
         eventId: z.string().describe("Event ID of the message to react to"),
         emoji: z.string().describe("Emoji to react with (e.g., '👍', '❤️', '😂')"),
       },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
     },
     sendReactionHandler
   );
@@ -154,6 +156,7 @@ export const registerMessageActionTools: ToolRegistrationFunction = (server) => 
         eventId: z.string().describe("Event ID of the message to edit"),
         newBody: z.string().describe("The new message content to replace the original with"),
       },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },
     editMessageHandler
   );
