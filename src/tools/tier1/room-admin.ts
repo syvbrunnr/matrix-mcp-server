@@ -198,10 +198,11 @@ export const setPowerLevelHandler = async (
     const targetMember = room.getMember(targetUserId);
     const currentTargetLevel = targetMember?.powerLevel || 0;
 
-    // Check: can't set power level higher than or equal to own (unless setting yourself)
-    if (targetUserId !== matrixUserId && powerLevel >= ownPowerLevel) {
+    // Check: can't set power level higher than own (unless setting yourself)
+    // Matrix spec allows promoting to your own level, just not above
+    if (targetUserId !== matrixUserId && powerLevel > ownPowerLevel) {
       return {
-        content: [{ type: "text" as const, text: `Error: Cannot set power level to ${powerLevel} — your own level is ${ownPowerLevel}. You can only set levels below your own.` }],
+        content: [{ type: "text" as const, text: `Error: Cannot set power level to ${powerLevel} — your own level is ${ownPowerLevel}. You can only set levels up to your own.` }],
         isError: true,
       };
     }
@@ -280,7 +281,7 @@ export const registerRoomAdminTools: ToolRegistrationFunction = (server) => {
       description:
         "Set the power level of a user in a Matrix room. " +
         "Common levels: 0 = default, 50 = moderator, 100 = admin. " +
-        "You can only set levels below your own, and cannot change users at or above your level.",
+        "You can only set levels up to your own, and cannot change users at or above your level.",
       inputSchema: {
         roomId: z.string().describe("Matrix room ID (e.g., !roomid:domain.com)"),
         targetUserId: z.string().describe("Matrix user ID to set power level for (e.g., @user:domain.com)"),
