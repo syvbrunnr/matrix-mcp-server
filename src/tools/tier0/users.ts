@@ -212,6 +212,43 @@ export const getAllUsersHandler = async (_input: any, { requestInfo, authInfo }:
   }
 };
 
+// Tool: Set display name
+export const setDisplayNameHandler = async (
+  { displayName }: { displayName: string },
+  { requestInfo, authInfo }: any
+) => {
+  const { matrixUserId, homeserverUrl } = getMatrixContext(requestInfo?.headers);
+  const accessToken = getAccessToken(requestInfo?.headers, authInfo?.token);
+
+  try {
+    const client = await createConfiguredMatrixClient(homeserverUrl, matrixUserId, accessToken);
+    const previousName = client.getUser(matrixUserId)?.displayName || "Not set";
+
+    await client.setDisplayName(displayName);
+
+    return {
+      content: [
+        {
+          type: "text",
+          text: `Successfully updated display name\nUser: ${matrixUserId}\nPrevious: ${previousName}\nNew: ${displayName}`,
+        },
+      ],
+    };
+  } catch (error: any) {
+    console.error(`Failed to set display name: ${error.message}`);
+    if (shouldEvictClientCache(error)) removeClientFromCache(matrixUserId, homeserverUrl);
+    return {
+      content: [
+        {
+          type: "text",
+          text: `Error: Failed to set display name - ${error.message}`,
+        },
+      ],
+      isError: true,
+    };
+  }
+};
+
 // Registration function
 export const registerUserTools: ToolRegistrationFunction = (server) => {
   // Tool: Get user profile
@@ -240,6 +277,20 @@ export const registerUserTools: ToolRegistrationFunction = (server) => {
       annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
     },
     getMyProfileHandler
+  );
+
+  // Tool: Set display name
+  server.registerTool(
+    "set-display-name",
+    {
+      title: "Set Display Name",
+      description: "Set your Matrix display name. This changes how your name appears to other users in rooms.",
+      inputSchema: {
+        displayName: z.string().describe("The new display name to set"),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    },
+    setDisplayNameHandler
   );
 
   // Tool: Get all users
