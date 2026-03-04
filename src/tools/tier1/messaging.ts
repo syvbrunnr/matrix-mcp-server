@@ -177,12 +177,19 @@ export const sendDirectMessageHandler = async (
       // Use existing DM room
       roomId = dmRoom.roomId;
     } else {
-      // Create new DM room
+      // Create new DM room with encryption enabled (matches Element's default behavior)
       const createResponse = await client.createRoom({
         is_direct: true,
         invite: [targetUserId],
         preset: "trusted_private_chat" as any,
         initial_state: [
+          {
+            type: "m.room.encryption",
+            state_key: "",
+            content: {
+              algorithm: "m.megolm.v1.aes-sha2",
+            },
+          },
           {
             type: "m.room.guest_access",
             content: {
