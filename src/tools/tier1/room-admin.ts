@@ -174,6 +174,72 @@ New topic: ${topic}`,
   }
 };
 
+// Tool: Set power level
+export const setPowerLevelHandler = async (
+  { roomId, targetUserId, powerLevel }: { roomId: string; targetUserId: string; powerLevel: number },
+  { requestInfo, authInfo }: any
+) => {
+  const { matrixUserId, homeserverUrl } = getMatrixContext(requestInfo?.headers);
+  const accessToken = getAccessToken(requestInfo?.headers, authInfo?.token);
+
+  try {
+    const client = await createConfiguredMatrixClient(homeserverUrl, matrixUserId, accessToken);
+
+    const room = client.getRoom(roomId);
+    if (!room) {
+      return {
+        content: [{ type: "text" as const, text: `Error: Room ${roomId} not found. You may not be a member of this room.` }],
+        isError: true,
+      };
+    }
+
+    const roomName = room.name || "Unnamed Room";
+    const ownPowerLevel = room.getMember(matrixUserId)?.powerLevel || 0;
+    const targetMember = room.getMember(targetUserId);
+    const currentTargetLevel = targetMember?.powerLevel || 0;
+
+    // Check: can't set power level higher than or equal to own (unless setting yourself)
+    if (targetUserId !== matrixUserId && powerLevel >= ownPowerLevel) {
+      return {
+        content: [{ type: "text" as const, text: `Error: Cannot set power level to ${powerLevel} — your own level is ${ownPowerLevel}. You can only set levels below your own.` }],
+        isError: true,
+      };
+    }
+
+    // Check: can't demote someone at or above own level (unless self)
+    if (targetUserId !== matrixUserId && currentTargetLevel >= ownPowerLevel) {
+      return {
+        content: [{ type: "text" as const, text: `Error: Cannot change power level of ${targetUserId} — their level (${currentTargetLevel}) is at or above yours (${ownPowerLevel}).` }],
+        isError: true,
+      };
+    }
+
+    await client.setPowerLevel(roomId, targetUserId, powerLevel);
+
+    return {
+      content: [{
+        type: "text" as const,
+        text: `Successfully updated power level in ${roomName}\nRoom ID: ${roomId}\nUser: ${targetUserId}\nPrevious level: ${currentTargetLevel}\nNew level: ${powerLevel}`,
+      }],
+    };
+  } catch (error: any) {
+    console.error(`Failed to set power level: ${error.message}`);
+    if (shouldEvictClientCache(error)) removeClientFromCache(matrixUserId, homeserverUrl);
+
+    let errorMessage = `Error: Failed to set power level - ${error.message}`;
+    if (error.message.includes("forbidden") || error.message.includes("M_FORBIDDEN")) {
+      errorMessage = `Error: You don't have permission to change power levels in this room`;
+    } else if (error.message.includes("not found") || error.message.includes("M_NOT_FOUND")) {
+      errorMessage = `Error: Room ${roomId} not found`;
+    }
+
+    return {
+      content: [{ type: "text" as const, text: errorMessage }],
+      isError: true,
+    };
+  }
+};
+
 // Registration function
 export const registerRoomAdminTools: ToolRegistrationFunction = (server) => {
   // Tool: Set room name
@@ -204,5 +270,24 @@ export const registerRoomAdminTools: ToolRegistrationFunction = (server) => {
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
     setRoomTopicHandler
+  );
+
+  // Tool: Set power level
+  server.registerTool(
+    "set-power-level",
+    {
+      title: "Set User Power Level",
+      description:
+        "Set the power level of a user in a Matrix room. " +
+        "Common levels: 0 = default, 50 = moderator, 100 = admin. " +
+        "You can only set levels below your own, and cannot change users at or above your level.",
+      inputSchema: {
+        roomId: z.string().describe("Matrix room ID (e.g., !roomid:domain.com)"),
+        targetUserId: z.string().describe("Matrix user ID to set power level for (e.g., @user:domain.com)"),
+        powerLevel: z.number().describe("Power level to set (0 = default, 50 = moderator, 100 = admin)"),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    },
+    setPowerLevelHandler
   );
 };
