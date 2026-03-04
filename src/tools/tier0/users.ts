@@ -1,5 +1,7 @@
 import { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
+import { existsSync, readFileSync } from "fs";
+import path from "path";
 import { createConfiguredMatrixClient, getAccessToken, getMatrixContext } from "../../utils/server-helpers.js";
 import { removeClientFromCache } from "../../matrix/client.js";
 import { shouldEvictClientCache } from "../../utils/matrix-errors.js";
@@ -122,6 +124,26 @@ Total devices: ${devices.devices.length}`;
         room.getMyMembership() === "join" && room.getJoinedMemberCount() === 2
     ).length;
 
+    // E2EE health from diagnostic file (written by crypto bootstrap in client.ts)
+    let e2eeStatus = "Not available";
+    try {
+      const dataDir = process.env.MATRIX_DATA_DIR ?? path.join(process.cwd(), ".data");
+      const diagPath = path.join(dataDir, "e2ee-diagnostic.json");
+      if (existsSync(diagPath)) {
+        const diag = JSON.parse(readFileSync(diagPath, "utf-8"));
+        if (diag.phase2Error) {
+          e2eeStatus = `Error: ${diag.phase2Error}`;
+        } else {
+          const cs = diag.crossSigningStatus;
+          const dv = diag.deviceVerificationStatus;
+          e2eeStatus = `Device: ${diag.deviceId || "unknown"}` +
+            `\n  Cross-signing keys on server: ${cs?.publicKeysOnDevice ?? "unknown"}` +
+            `\n  Private keys cached locally: ${cs?.privateKeysCachedLocally?.masterKey ?? "unknown"}` +
+            `\n  Device cross-signed: ${dv?.crossSigningVerified ?? "unknown"}`;
+        }
+      }
+    } catch { /* diagnostic file unreadable — non-fatal */ }
+
     return {
       content: [
         {
@@ -133,7 +155,8 @@ Presence: ${presence}
 Status: ${presenceStatus}
 Joined Rooms: ${roomCount}
 Direct Messages: ${dmCount}
-${deviceInfo}`,
+${deviceInfo}
+E2EE Status: ${e2eeStatus}`,
         },
       ],
     };
@@ -212,7 +235,7 @@ export const registerUserTools: ToolRegistrationFunction = (server) => {
     "get-my-profile",
     {
       title: "Get My Matrix Profile",
-      description: "Get your own profile information including display name, avatar, settings, and device list",
+      description: "Get your own profile information including display name, avatar, settings, device list, and E2EE encryption health status",
       inputSchema: {},
       annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
     },

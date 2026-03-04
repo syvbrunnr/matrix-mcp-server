@@ -74,6 +74,8 @@ interface CollectedMessage {
   isDM: boolean;
   threadRootEventId?: string;
   replyToEventId?: string;
+  decryptionFailed?: boolean;
+  decryptionFailureReason?: string;
 }
 
 interface CollectedReaction {
@@ -118,11 +120,12 @@ function extractMessage(
 
   const evtRoomId = event.getRoomId() || "";
   const room = client.getRoom(evtRoomId);
-  return {
+  const isEncrypted = evtType === EventType.RoomMessageEncrypted;
+  const msg: CollectedMessage = {
     roomId: evtRoomId,
     roomName: room?.name || evtRoomId,
     sender: event.getSender() || "",
-    body: String(content?.body || (evtType === EventType.RoomMessageEncrypted ? "[encrypted]" : "")),
+    body: String(content?.body || (isEncrypted ? "[encrypted]" : "")),
     eventId: eid,
     timestamp: ts,
     isDM: dmRoomIds.has(evtRoomId),
@@ -130,6 +133,12 @@ function extractMessage(
       ? relatesTo.event_id : undefined,
     replyToEventId: relatesTo?.["m.in_reply_to"]?.event_id,
   };
+  if (isEncrypted && !content?.body) {
+    msg.decryptionFailed = true;
+    const reason = (event as any).decryptionFailureReason;
+    if (reason) msg.decryptionFailureReason = reason;
+  }
+  return msg;
 }
 
 export const waitForMessagesHandler = async (
@@ -544,6 +553,8 @@ export const waitForMessagesHandler = async (
               isDM: m.isDM,
               ...(m.threadRootEventId ? { threadRootEventId: m.threadRootEventId } : {}),
               ...(m.replyToEventId ? { replyToEventId: m.replyToEventId } : {}),
+              ...(m.decryptionFailed ? { decryptionFailed: true } : {}),
+              ...(m.decryptionFailureReason ? { decryptionFailureReason: m.decryptionFailureReason } : {}),
             })),
             ...(pendingInvites.length > 0 ? { invites: pendingInvites } : {}),
             ...reactionPayload,

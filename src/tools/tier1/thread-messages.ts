@@ -117,7 +117,11 @@ export const registerThreadMessageTools: ToolRegistrationFunction = (server) => 
             body: String(content?.body || (isEncrypted ? "[encrypted]" : "")),
             threadRootEventId,
           };
-          if (isEncrypted && !content?.body) metadata.decryptionFailed = true;
+          if (isEncrypted && !content?.body) {
+            metadata.decryptionFailed = true;
+            const reason = (event as any).decryptionFailureReason;
+            if (reason) metadata.decryptionFailureReason = reason;
+          }
           if (relatesTo?.["m.in_reply_to"]?.event_id) {
             metadata.replyToEventId = relatesTo["m.in_reply_to"].event_id;
           }

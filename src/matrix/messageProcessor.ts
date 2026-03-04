@@ -56,7 +56,11 @@ export async function processMessage(
         timestamp: new Date(event.getTs()).toISOString(),
         body: String(body),
       };
-      if (isEncrypted && !content.body) metadata.decryptionFailed = true;
+      if (isEncrypted && !content.body) {
+        metadata.decryptionFailed = true;
+        const reason = (event as any).decryptionFailureReason;
+        if (reason) metadata.decryptionFailureReason = reason;
+      }
       if (replyToEventId) metadata.replyToEventId = replyToEventId;
       if (threadRootEventId) metadata.threadRootEventId = threadRootEventId;
 
