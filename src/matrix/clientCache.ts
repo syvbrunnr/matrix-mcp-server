@@ -96,6 +96,22 @@ export function getCachedClient(userId: string, homeserverUrl: string): MatrixCl
     return null;
   }
   
+  // Check sync health: if the client's sync connection is unhealthy (STOPPED, ERROR,
+  // RECONNECTING, null), evict it so the caller gets a fresh one. This prevents stale
+  // clients from returning null for getRoom() while getRooms() still works from the
+  // local store. wait-for-messages already had this check; now all tools benefit.
+  const syncState = cached.client.getSyncState();
+  if (syncState && syncState !== "SYNCING" && syncState !== "PREPARED") {
+    console.error(`Cached client sync unhealthy (${syncState}) for ${userId}, evicting`);
+    try {
+      cached.client.stopClient();
+    } catch (error) {
+      console.warn(`Error stopping unhealthy client: ${error}`);
+    }
+    clientCache.delete(key);
+    return null;
+  }
+
   // Update last accessed time
   cached.lastAccessed = Date.now();
   console.error(`Using cached Matrix client for ${userId}`);
