@@ -45,7 +45,7 @@ export async function exchangeToken(
   );
   params.append("audience", matrixClientId);
 
-  console.log(`Performing token exchange with IDP at ${tokenUrl}`);
+  console.error(`Performing token exchange with IDP at ${tokenUrl}`);
   
   try {
     const resp = await fetch(tokenUrl, {
@@ -86,7 +86,7 @@ export async function exchangeToken(
       throw new Error("Access token not found in token exchange response.");
     }
 
-    console.log("Successfully exchanged token.");
+    console.error("Successfully exchanged token.");
     return data.access_token;
   } catch (err: any) {
     console.error("Error occurred during token exchange:", err);

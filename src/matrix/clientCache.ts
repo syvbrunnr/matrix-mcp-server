@@ -40,7 +40,7 @@ function cleanupExpiredClients(): void {
   const now = Date.now();
   for (const [key, cached] of clientCache.entries()) {
     if (now - cached.lastAccessed > CACHE_TTL_MS) {
-      console.log(`Cleaning up expired Matrix client for ${cached.userId}`);
+      console.error(`Cleaning up expired Matrix client for ${cached.userId}`);
       try {
         cached.client.stopClient();
       } catch (error) {
@@ -86,7 +86,7 @@ export function getCachedClient(userId: string, homeserverUrl: string): MatrixCl
   
   // Check if expired
   if (Date.now() - cached.lastAccessed > CACHE_TTL_MS) {
-    console.log(`Cached client expired for ${userId}`);
+    console.error(`Cached client expired for ${userId}`);
     try {
       cached.client.stopClient();
     } catch (error) {
@@ -98,7 +98,7 @@ export function getCachedClient(userId: string, homeserverUrl: string): MatrixCl
   
   // Update last accessed time
   cached.lastAccessed = Date.now();
-  console.log(`Using cached Matrix client for ${userId}`);
+  console.error(`Using cached Matrix client for ${userId}`);
   return cached.client;
 }
 
@@ -127,7 +127,7 @@ export function cacheClient(client: MatrixClient, userId: string, homeserverUrl:
     homeserverUrl
   });
   
-  console.log(`Cached Matrix client for ${userId}`);
+  console.error(`Cached Matrix client for ${userId}`);
 }
 
 /**
@@ -144,7 +144,7 @@ export function removeCachedClient(userId: string, homeserverUrl: string): void 
       console.warn(`Error stopping client during removal: ${error}`);
     }
     clientCache.delete(key);
-    console.log(`Removed cached Matrix client for ${userId}`);
+    console.error(`Removed cached Matrix client for ${userId}`);
   }
 }
 
@@ -163,7 +163,7 @@ export function shutdownAllClients(): void {
   }
   
   clientCache.clear();
-  console.log("Shutdown all cached Matrix clients");
+  console.error("Shutdown all cached Matrix clients");
 }
 
 /**

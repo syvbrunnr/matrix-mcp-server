@@ -195,8 +195,15 @@ export const sendDirectMessageHandler = async (
       
       // Mark as DM in account data
       try {
-        const existingDmData: any = await client.getAccountData("m.direct" as any);
-        const dmData: { [key: string]: string[] } = (existingDmData && typeof existingDmData === 'object' && !Array.isArray(existingDmData)) ? { ...existingDmData } : {};
+        const existingDmEvent = client.getAccountData("m.direct" as any) as any;
+        const existingDmContent = existingDmEvent?.getContent?.() ?? existingDmEvent ?? {};
+        const dmData: { [key: string]: string[] } = {};
+        // Safely extract only valid room ID arrays from m.direct content
+        for (const [userId, rooms] of Object.entries(existingDmContent)) {
+          if (Array.isArray(rooms)) {
+            dmData[userId] = rooms.filter((r): r is string => typeof r === "string" && r.startsWith("!"));
+          }
+        }
         if (!dmData[targetUserId]) {
           dmData[targetUserId] = [];
         }

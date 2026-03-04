@@ -370,20 +370,6 @@ export async function createMatrixClient(
 }
 
 /**
- * Safely stops a Matrix client and cleans up resources
- * Note: This function is now deprecated since clients are cached and managed automatically.
- * Clients should not be manually stopped as they may be reused by other operations.
- *
- * @param client - Matrix client to stop
- * @deprecated Use cached clients instead, they are managed automatically
- */
-export function stopMatrixClient(_client: MatrixClient): void {
-  // For now, do nothing - clients are managed by the cache
-  // In the future, we may want to remove this function entirely
-  console.warn("stopMatrixClient called - clients are now cached and should not be manually stopped");
-}
-
-/**
  * Remove a client from cache and stop it (for error recovery)
  *
  * @param userId - Matrix user ID  
