@@ -179,6 +179,9 @@ export const waitForMessagesHandler = async (
     const catchupSinceId = sinceTimestamp > 0 ? sinceEventId : undefined;
 
     const liveReactions: CollectedReaction[] = [];
+    // Diagnostics: count all timeline events by type to debug filtering issues
+    const debugEventCounts: Record<string, number> = {};
+    const debugDropReasons: Record<string, number> = {};
 
     const result = await new Promise<{ messages: CollectedMessage[]; reactions: CollectedReaction[]; timedOut: boolean; syncStale?: boolean; reactionsOnly?: boolean }>((resolve) => {
       let reactionDebounceTimer: ReturnType<typeof setTimeout> | null = null;
@@ -187,10 +190,17 @@ export const waitForMessagesHandler = async (
 
       const onEvent = (event: MatrixEvent) => {
         const evtRoomId = event.getRoomId();
+        const rawType = event.getType();
+
+        // Track all events for diagnostics (live mode only to avoid catch-up noise)
+        if (liveModeActive) {
+          debugEventCounts[rawType] = (debugEventCounts[rawType] || 0) + 1;
+        }
+
         if (roomId && evtRoomId !== roomId) return;
 
         // Reactions on own messages — collect for 2-min digest (live mode only)
-        if (event.getType() === "m.reaction") {
+        if (rawType === "m.reaction") {
           if (!liveModeActive) return;
           const relatesTo = event.getContent()?.["m.relates_to"];
           if (relatesTo?.rel_type === "m.annotation" && relatesTo.key && relatesTo.event_id) {
@@ -218,15 +228,27 @@ export const waitForMessagesHandler = async (
         }
 
         // Only m.room.message and m.room.encrypted events from here
-        const evtType = event.getType();
-        if (evtType !== EventType.RoomMessage && evtType !== EventType.RoomMessageEncrypted) return;
-        if (event.getSender() === ownUserId) return;
+        const evtType = rawType;
+        if (evtType !== EventType.RoomMessage && evtType !== EventType.RoomMessageEncrypted) {
+          if (liveModeActive) debugDropReasons[`type:${rawType}`] = (debugDropReasons[`type:${rawType}`] || 0) + 1;
+          return;
+        }
+        if (event.getSender() === ownUserId) {
+          if (liveModeActive) debugDropReasons["own_message"] = (debugDropReasons["own_message"] || 0) + 1;
+          return;
+        }
 
         // Skip events at or before the catch-up baseline
         const ts = event.getTs();
         const eid = event.getId();
-        if (ts < catchupSinceTs) return;
-        if (ts === catchupSinceTs && eid === catchupSinceId) return;
+        if (ts < catchupSinceTs) {
+          if (liveModeActive) debugDropReasons["before_cursor"] = (debugDropReasons["before_cursor"] || 0) + 1;
+          return;
+        }
+        if (ts === catchupSinceTs && eid === catchupSinceId) {
+          if (liveModeActive) debugDropReasons["at_cursor"] = (debugDropReasons["at_cursor"] || 0) + 1;
+          return;
+        }
 
         // For encrypted events, try to use decrypted content if available
         const content = event.getClearContent?.() || event.getContent();
@@ -235,7 +257,10 @@ export const waitForMessagesHandler = async (
         if (event.isRedacted()) return;
 
         // Dedup: the catch-up scan and live listener share seenEventIds
-        if (!eid || seenEventIds.has(eid)) return;
+        if (!eid || seenEventIds.has(eid)) {
+          if (liveModeActive) debugDropReasons["dedup"] = (debugDropReasons["dedup"] || 0) + 1;
+          return;
+        }
         seenEventIds.add(eid);
 
         const room = evtRoomId ? client.getRoom(evtRoomId) : null;
@@ -454,6 +479,18 @@ export const waitForMessagesHandler = async (
     const syncState = client.getSyncState();
     const syncDiag = syncState !== "SYNCING" ? { syncState: syncState ?? "null" } : {};
 
+    // Debug diagnostics: include event counts and drop reasons when no messages received.
+    // This helps diagnose issues like encrypted DM events not being delivered by sync.
+    const hasDebugData = Object.keys(debugEventCounts).length > 0 || Object.keys(debugDropReasons).length > 0;
+    const debugPayload = hasDebugData ? {
+      _debug: {
+        liveEventCounts: debugEventCounts,
+        ...(Object.keys(debugDropReasons).length > 0 ? { dropReasons: debugDropReasons } : {}),
+        dmRoomCount: dmRoomIds.size,
+        joinedRoomCount: client.getRooms().filter((r) => r.getMyMembership() === "join").length,
+      },
+    } : {};
+
     if (result.messages.length === 0) {
       return {
         content: [
@@ -467,6 +504,7 @@ export const waitForMessagesHandler = async (
               ...reactionPayload,
               ...(nextSince ? { since: nextSince } : {}),
               ...syncDiag,
+              ...debugPayload,
             }),
           },
         ],
