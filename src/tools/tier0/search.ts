@@ -105,7 +105,7 @@ export const registerSearchTools: ToolRegistrationFunction = (server) => {
           .string()
           .optional()
           .describe("Specific server to search rooms on (defaults to your homeserver)"),
-        limit: z
+        limit: z.coerce
           .number()
           .default(20)
           .describe("Maximum number of rooms to return (default: 20)"),

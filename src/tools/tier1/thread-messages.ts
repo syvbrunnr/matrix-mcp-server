@@ -22,7 +22,7 @@ export const registerThreadMessageTools: ToolRegistrationFunction = (server) => 
         threadRootEventId: z
           .string()
           .describe("Event ID of the thread root message"),
-        limit: z
+        limit: z.coerce
           .number()
           .default(50)
           .describe("Maximum number of thread replies to return (default: 50)"),

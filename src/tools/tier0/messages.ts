@@ -190,7 +190,7 @@ export const registerMessageTools: ToolRegistrationFunction = (server) => {
         "or with threadRootEventId to continue a thread.",
       inputSchema: {
         roomId: z.string().describe("Matrix room ID (e.g., !roomid:domain.com)"),
-        limit: z
+        limit: z.coerce
           .number()
           .default(20)
           .describe("Maximum number of messages to retrieve (default: 20)"),
@@ -231,7 +231,7 @@ export const registerMessageTools: ToolRegistrationFunction = (server) => {
       description: "Find the most active users in a Matrix room based on message count in recent history",
       inputSchema: {
         roomId: z.string().describe("Matrix room ID (e.g., !roomid:domain.com)"),
-        limit: z
+        limit: z.coerce
           .number()
           .default(10)
           .describe("Maximum number of active users to return (default: 10)"),

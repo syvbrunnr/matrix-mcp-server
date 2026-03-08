@@ -401,7 +401,7 @@ export const registerRoomManagementTools: ToolRegistrationFunction = (server) =>
       inputSchema: {
         roomName: z.string().describe("Name for the new room"),
         isPrivate: z
-          .boolean()
+          .preprocess((v) => (typeof v === "string" ? v === "true" : v), z.boolean())
           .default(false)
           .describe("Whether the room should be private (default: false - public room)"),
         topic: z
@@ -409,7 +409,7 @@ export const registerRoomManagementTools: ToolRegistrationFunction = (server) =>
           .optional()
           .describe("Optional topic/description for the room"),
         inviteUsers: z
-          .array(z.string())
+          .preprocess((v) => (typeof v === "string" ? JSON.parse(v) : v), z.array(z.string()))
           .optional()
           .describe("Optional array of user IDs to invite to the room"),
         roomAlias: z

@@ -285,7 +285,7 @@ export const registerRoomAdminTools: ToolRegistrationFunction = (server) => {
       inputSchema: {
         roomId: z.string().describe("Matrix room ID (e.g., !roomid:domain.com)"),
         targetUserId: z.string().describe("Matrix user ID to set power level for (e.g., @user:domain.com)"),
-        powerLevel: z.number().describe("Power level to set (0 = default, 50 = moderator, 100 = admin)"),
+        powerLevel: z.coerce.number().describe("Power level to set (0 = default, 50 = moderator, 100 = admin)"),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },

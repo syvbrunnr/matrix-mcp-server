@@ -19,7 +19,7 @@ export const registerWaitForMessagesTools: ToolRegistrationFunction = (server) =
           .string()
           .optional()
           .describe("Matrix room ID to watch. Omit to watch all joined rooms including DMs."),
-        timeoutMs: z
+        timeoutMs: z.coerce
           .number()
           .default(DEFAULT_TIMEOUT_MS)
           .describe("How long to wait in milliseconds (default 30 seconds, no upper limit)"),

@@ -249,7 +249,7 @@ export const registerNotificationTools: ToolRegistrationFunction = (server) => {
         "Note: E2EE message content in DMs may be undecryptable on some homeservers (e.g., Dendrite) due to device key sharing limitations.",
       inputSchema: {
         includeEmpty: z
-          .boolean()
+          .preprocess((v) => (typeof v === "string" ? v === "true" : v), z.boolean())
           .default(false)
           .describe("Include DM rooms with no recent messages (default: false)"),
       },
