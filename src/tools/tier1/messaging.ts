@@ -263,6 +263,104 @@ ${!dmRoom ? "New DM room created" : "Used existing DM room"}`,
   }
 };
 
+// Tool: Send image
+export const sendImageHandler = async (
+  { roomId, imageBase64, mimeType, filename, body, replyToEventId, threadRootEventId }: {
+    roomId: string;
+    imageBase64: string;
+    mimeType?: string;
+    filename?: string;
+    body?: string;
+    replyToEventId?: string;
+    threadRootEventId?: string;
+  },
+  { requestInfo, authInfo }: any
+) => {
+  const { matrixUserId, homeserverUrl } = getMatrixContext(requestInfo?.headers);
+  const accessToken = getAccessToken(requestInfo?.headers, authInfo?.token);
+
+  try {
+    const client = await createConfiguredMatrixClient(homeserverUrl, matrixUserId, accessToken);
+
+    const room = client.getRoom(roomId);
+    if (!room) {
+      return {
+        content: [{ type: "text", text: `Error: Room with ID ${roomId} not found.` }],
+        isError: true,
+      };
+    }
+
+    // Decode base64 to buffer.
+    const buffer = Buffer.from(imageBase64, "base64");
+    const effectiveMime = mimeType || "image/png";
+    const effectiveFilename = filename || "image.png";
+
+    // Upload to Matrix content repository.
+    const uploadResponse = await client.uploadContent(buffer, {
+      type: effectiveMime,
+      name: effectiveFilename,
+    });
+
+    const mxcUrl = uploadResponse.content_uri;
+
+    // Build m.image event content.
+    const content: Record<string, any> = {
+      msgtype: "m.image",
+      body: body || effectiveFilename,
+      url: mxcUrl,
+      info: {
+        mimetype: effectiveMime,
+        size: buffer.length,
+      },
+    };
+
+    // Handle threading/replies (same logic as send-message).
+    let effectiveThreadRoot = threadRootEventId;
+    if (replyToEventId && !effectiveThreadRoot) {
+      const targetEvent = room.findEventById(replyToEventId);
+      if (targetEvent) {
+        const targetRelatesTo = targetEvent.getContent()?.["m.relates_to"];
+        if (targetRelatesTo?.rel_type === "m.thread" || targetRelatesTo?.rel_type === "io.element.thread") {
+          effectiveThreadRoot = targetRelatesTo.event_id;
+        } else if (room.getJoinedMemberCount() > 2) {
+          effectiveThreadRoot = replyToEventId;
+        }
+      } else if (room.getJoinedMemberCount() > 2) {
+        effectiveThreadRoot = replyToEventId;
+      }
+    }
+
+    if (effectiveThreadRoot) {
+      content["m.relates_to"] = {
+        rel_type: "io.element.thread",
+        event_id: effectiveThreadRoot,
+        "m.in_reply_to": { event_id: replyToEventId || effectiveThreadRoot },
+        is_falling_back: !replyToEventId,
+      };
+    } else if (replyToEventId) {
+      content["m.relates_to"] = {
+        "m.in_reply_to": { event_id: replyToEventId },
+      };
+    }
+
+    const response = await client.sendEvent(roomId, "m.room.message" as any, content as any);
+
+    return {
+      content: [{
+        type: "text",
+        text: `Image sent successfully to ${room.name || roomId}\nEvent ID: ${response.event_id}\nMXC URL: ${mxcUrl}\nSize: ${buffer.length} bytes`,
+      }],
+    };
+  } catch (error: any) {
+    console.error(`Failed to send image: ${error.message}`);
+    if (shouldEvictClientCache(error)) removeClientFromCache(matrixUserId, homeserverUrl);
+    return {
+      content: [{ type: "text", text: `Error: Failed to send image - ${error.message}` }],
+      isError: true,
+    };
+  }
+};
+
 // Registration function
 export const registerMessagingTools: ToolRegistrationFunction = (server) => {
   // Tool: Send message
@@ -318,5 +416,45 @@ export const registerMessagingTools: ToolRegistrationFunction = (server) => {
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
     },
     sendDirectMessageHandler
+  );
+
+  // Tool: Send image
+  server.registerTool(
+    "send-image",
+    {
+      title: "Send Image to Matrix Room",
+      description:
+        "Upload and send an image to a Matrix room. Accepts base64-encoded image data. " +
+        "Supports threading and replies like send-message. " +
+        "The image is uploaded to the Matrix content repository and sent as an m.image event.",
+      inputSchema: {
+        roomId: z.string().describe("Matrix room ID (e.g., !roomid:domain.com)"),
+        imageBase64: z.string().describe("Base64-encoded image data (no data: prefix)"),
+        mimeType: z
+          .string()
+          .default("image/png")
+          .optional()
+          .describe("MIME type of the image (default: image/png)"),
+        filename: z
+          .string()
+          .default("image.png")
+          .optional()
+          .describe("Filename for the uploaded image (default: image.png)"),
+        body: z
+          .string()
+          .optional()
+          .describe("Alt text / body for the image message"),
+        replyToEventId: z
+          .string()
+          .optional()
+          .describe("Event ID to reply to"),
+        threadRootEventId: z
+          .string()
+          .optional()
+          .describe("Event ID of the thread root"),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+    },
+    sendImageHandler
   );
 };
