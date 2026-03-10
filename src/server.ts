@@ -19,6 +19,7 @@ import { registerRoomAdminTools } from "./tools/tier1/room-admin.js";
 import { registerMessageActionTools } from "./tools/tier1/message-actions.js";
 import { registerServerAdminTools } from "./tools/tier1/server-admin.js";
 import { registerThreadMessageTools } from "./tools/tier1/thread-messages.js";
+import { registerNotificationSubscribeTools } from "./tools/tier1/notification-subscribe.js";
 
 // Create MCP server instance
 const server = new McpServer(
@@ -54,5 +55,6 @@ registerRoomAdminTools(server);       // set-room-name, set-room-topic
 registerMessageActionTools(server);  // redact-event, send-reaction, edit-message
 registerServerAdminTools(server);    // restart-server
 registerThreadMessageTools(server);  // get-thread-messages
+registerNotificationSubscribeTools(server); // subscribe-notifications, unsubscribe-notifications
 
 export default server;

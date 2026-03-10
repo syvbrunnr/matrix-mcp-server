@@ -11,7 +11,8 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import server from "./server.js";
 import { shutdownAllClients } from "./matrix/clientCache.js";
 import { startAutoSync, stopAutoSync } from "./matrix/autoSync.js";
-import { closeMessageQueue } from "./matrix/messageQueue.js";
+import { closeMessageQueue, getMessageQueue } from "./matrix/messageQueue.js";
+import { matchesSubscription } from "./matrix/notificationSubscriptions.js";
 
 // Self-wrapping hot-reload: the outer process (no MCP_CHILD env) stays alive and
 // restarts the inner process on clean exit (exit code 0). Claude Code's stdio
@@ -65,6 +66,18 @@ if (!process.env.MCP_CHILD) {
     startAutoSync().catch((err) => console.error("[autoSync] Failed to start:", err));
     // Notify Claude Code to re-fetch the tool list (handles hot reload).
     setTimeout(() => server.sendToolListChanged(), 100);
+    // Send MCP notification when new messages arrive (picked up by mcp-notify proxy).
+    // Only fires if the event matches an active subscription (silent by default).
+    // Debounce: coalesce rapid-fire events (e.g. startup backlog) into one notification.
+    let notifyTimer: ReturnType<typeof setTimeout> | null = null;
+    getMessageQueue().on("new-item", (event: { roomId: string; sender: string; isDM: boolean }) => {
+      if (!event || !matchesSubscription(event)) return;
+      if (notifyTimer) clearTimeout(notifyTimer);
+      notifyTimer = setTimeout(() => {
+        notifyTimer = null;
+        try { server.sendResourceListChanged(); } catch { /* transport may not be ready */ }
+      }, 3000);
+    });
   }
 
   function shutdown() {
