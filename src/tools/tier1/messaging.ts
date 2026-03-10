@@ -3,6 +3,7 @@ import { z } from "zod";
 import { createConfiguredMatrixClient, getAccessToken, getMatrixContext } from "../../utils/server-helpers.js";
 import { removeClientFromCache } from "../../matrix/client.js";
 import { shouldEvictClientCache } from "../../utils/matrix-errors.js";
+import { resolveThreadRoot, buildRelatesTo } from "../../utils/threading.js";
 import { ToolRegistrationFunction } from "../../types/tool-types.js";
 
 // Tool: Send message
@@ -52,48 +53,8 @@ export const sendMessageHandler = async (
       };
     }
 
-    // Auto-detect thread: if replying to a message that's in a thread, stay in that thread.
-    // In group rooms (3+ members), auto-create a new thread when replying to a standalone message.
-    let effectiveThreadRoot = threadRootEventId;
-    if (replyToEventId && !effectiveThreadRoot) {
-      const targetEvent = room.findEventById(replyToEventId);
-      if (targetEvent) {
-        const targetRelatesTo = targetEvent.getContent()?.["m.relates_to"];
-        if (targetRelatesTo?.rel_type === "m.thread" || targetRelatesTo?.rel_type === "io.element.thread") {
-          // Target is in a thread — stay in it
-          effectiveThreadRoot = targetRelatesTo.event_id;
-        } else if (room.getJoinedMemberCount() > 2) {
-          // Target is standalone in a group room — auto-start a new thread
-          effectiveThreadRoot = replyToEventId;
-        }
-      } else if (room.getJoinedMemberCount() > 2) {
-        // Target event not in cache but it's a group room — auto-start thread
-        effectiveThreadRoot = replyToEventId;
-      }
-    }
-
-    // Build the m.relates_to object for threading and/or replies
-    let relatesTo: Record<string, any> | undefined;
-
-    if (effectiveThreadRoot) {
-      // Matrix threading — use io.element.thread for broad compatibility
-      // (Element/Dendrite use this over the spec-standard m.thread)
-      relatesTo = {
-        rel_type: "io.element.thread",
-        event_id: effectiveThreadRoot,
-        // If replying within a thread, set is_falling_back so clients render correctly
-        "m.in_reply_to": {
-          event_id: replyToEventId || effectiveThreadRoot,
-        },
-        is_falling_back: !replyToEventId,
-      };
-    } else if (replyToEventId) {
-      relatesTo = {
-        "m.in_reply_to": {
-          event_id: replyToEventId,
-        },
-      };
-    }
+    const effectiveThreadRoot = resolveThreadRoot(room, replyToEventId, threadRootEventId);
+    const relatesTo = buildRelatesTo(effectiveThreadRoot, replyToEventId);
 
     let response;
     if (relatesTo) {
@@ -314,33 +275,10 @@ export const sendImageHandler = async (
       },
     };
 
-    // Handle threading/replies (same logic as send-message).
-    let effectiveThreadRoot = threadRootEventId;
-    if (replyToEventId && !effectiveThreadRoot) {
-      const targetEvent = room.findEventById(replyToEventId);
-      if (targetEvent) {
-        const targetRelatesTo = targetEvent.getContent()?.["m.relates_to"];
-        if (targetRelatesTo?.rel_type === "m.thread" || targetRelatesTo?.rel_type === "io.element.thread") {
-          effectiveThreadRoot = targetRelatesTo.event_id;
-        } else if (room.getJoinedMemberCount() > 2) {
-          effectiveThreadRoot = replyToEventId;
-        }
-      } else if (room.getJoinedMemberCount() > 2) {
-        effectiveThreadRoot = replyToEventId;
-      }
-    }
-
-    if (effectiveThreadRoot) {
-      content["m.relates_to"] = {
-        rel_type: "io.element.thread",
-        event_id: effectiveThreadRoot,
-        "m.in_reply_to": { event_id: replyToEventId || effectiveThreadRoot },
-        is_falling_back: !replyToEventId,
-      };
-    } else if (replyToEventId) {
-      content["m.relates_to"] = {
-        "m.in_reply_to": { event_id: replyToEventId },
-      };
+    const effectiveThreadRoot = resolveThreadRoot(room, replyToEventId, threadRootEventId);
+    const relatesTo = buildRelatesTo(effectiveThreadRoot, replyToEventId);
+    if (relatesTo) {
+      content["m.relates_to"] = relatesTo;
     }
 
     const response = await client.sendEvent(roomId, "m.room.message" as any, content as any);
