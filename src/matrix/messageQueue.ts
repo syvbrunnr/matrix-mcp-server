@@ -274,6 +274,46 @@ class MessageQueue extends EventEmitter {
     })();
   }
 
+  /**
+   * Fetch recent messages per room for conversation context.
+   * Returns up to `limit` recent messages per room (regardless of fetched status),
+   * excluding the queued event IDs themselves (to avoid duplication).
+   */
+  getContext(roomIds: string[], limit: number, excludeEventIds: Set<string>): Map<string, QueuedMessage[]> {
+    const result = new Map<string, QueuedMessage[]>();
+    const stmt = this.db.prepare(`
+      SELECT * FROM queued_items
+      WHERE room_id = ? AND event_type = 'message' AND body IS NOT NULL AND sender != ''
+      ORDER BY timestamp DESC LIMIT ?
+    `);
+
+    for (const roomId of roomIds) {
+      const rows = stmt.all(roomId, limit + excludeEventIds.size) as any[];
+      const messages: QueuedMessage[] = [];
+      for (const row of rows) {
+        if (excludeEventIds.has(row.event_id)) continue;
+        if (messages.length >= limit) break;
+        messages.push({
+          eventId: row.event_id,
+          roomId: row.room_id,
+          roomName: row.room_name,
+          sender: row.sender,
+          body: row.body || "",
+          timestamp: row.timestamp,
+          isDM: row.is_dm === 1,
+          ...(row.thread_root_event_id ? { threadRootEventId: row.thread_root_event_id } : {}),
+          ...(row.reply_to_event_id ? { replyToEventId: row.reply_to_event_id } : {}),
+        });
+      }
+      if (messages.length > 0) {
+        // Reverse to chronological order
+        messages.reverse();
+        result.set(roomId, messages);
+      }
+    }
+    return result;
+  }
+
   getSyncToken(): string | null {
     const row = this.stmts.getSyncToken.get() as { value: string } | undefined;
     return row?.value ?? null;
@@ -336,7 +376,13 @@ class MessageQueue extends EventEmitter {
 
   cleanup(maxAgeMs: number = 24 * 60 * 60 * 1000): number {
     const cutoff = Date.now() - maxAgeMs;
-    const result = this.db.prepare("DELETE FROM queued_items WHERE fetched = 1 AND timestamp < ?").run(cutoff);
+    // Tombstone: clear content but preserve event_id for dedup (prevents re-queuing on restart)
+    const result = this.db.prepare(
+      `UPDATE queued_items
+       SET body = NULL, emoji = NULL, room_name = '', sender = '',
+           invited_by = NULL, decryption_failure_reason = NULL
+       WHERE fetched = 1 AND timestamp < ? AND (body IS NOT NULL OR emoji IS NOT NULL OR sender != '')`
+    ).run(cutoff);
     return result.changes;
   }
 

@@ -16,12 +16,37 @@ export const registerGetQueuedMessagesTools: ToolRegistrationFunction = (server)
           .string()
           .optional()
           .describe("Optional room ID to fetch messages for a specific room only"),
+        contextMessages: z
+          .number()
+          .optional()
+          .describe("Include N recent previous messages per room/DM for conversation context (default: 3, max: 10)"),
       },
       annotations: { readOnlyHint: false, idempotentHint: false, openWorldHint: true },
     },
-    async ({ roomId }: { roomId?: string }) => {
+    async ({ roomId, contextMessages }: { roomId?: string; contextMessages?: number }) => {
       const queue = getMessageQueue();
       const contents = queue.dequeue(roomId);
+
+      // Build context if requested
+      const ctxLimit = Math.min(Math.max(contextMessages ?? 3, 0), 10);
+      let context: Record<string, any[]> | undefined;
+      if (ctxLimit > 0 && contents.messages.length > 0) {
+        const roomIds = [...new Set(contents.messages.map(m => m.roomId))];
+        const excludeIds = new Set(contents.messages.map(m => m.eventId));
+        const ctxMap = queue.getContext(roomIds, ctxLimit, excludeIds);
+        if (ctxMap.size > 0) {
+          context = {};
+          for (const [rid, msgs] of ctxMap) {
+            const roomName = contents.messages.find(m => m.roomId === rid)?.roomName ?? rid;
+            context[roomName] = msgs.map(m => ({
+              sender: m.sender,
+              body: m.body,
+              timestamp: new Date(m.timestamp).toISOString(),
+              ...(m.threadRootEventId ? { threadRootEventId: m.threadRootEventId } : {}),
+            }));
+          }
+        }
+      }
 
       return {
         content: [{
@@ -58,6 +83,7 @@ export const registerGetQueuedMessagesTools: ToolRegistrationFunction = (server)
               invitedBy: i.invitedBy,
               timestamp: new Date(i.timestamp).toISOString(),
             })),
+            ...(context ? { context } : {}),
           }),
         }],
       };

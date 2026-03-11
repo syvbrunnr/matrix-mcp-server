@@ -4,6 +4,7 @@ import {
   setSubscription,
   getSubscription,
 } from "../../matrix/notificationSubscriptions.js";
+import { getMessageQueue } from "../../matrix/messageQueue.js";
 
 export const registerNotificationSubscribeTools: ToolRegistrationFunction = (
   server
@@ -50,6 +51,12 @@ export const registerNotificationSubscribeTools: ToolRegistrationFunction = (
       if (sub?.dms) parts.push("all DMs");
       if (sub?.rooms?.length) parts.push(`rooms: ${sub.rooms.join(", ")}`);
       if (sub?.users?.length) parts.push(`users: ${sub.users.join(", ")}`);
+
+      // Notify immediately if there are already queued messages
+      const pending = getMessageQueue().peek();
+      if (pending.count > 0 && parts.length > 0) {
+        try { server.sendResourceListChanged(); } catch { /* transport may not be ready */ }
+      }
 
       return {
         content: [
