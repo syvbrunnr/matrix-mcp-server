@@ -33,7 +33,7 @@ claude mcp add --scope user matrix-server \
   -e MATRIX_HOMESERVER_URL=https://your-homeserver.com \
   -e MATRIX_DATA_DIR=/path/to/persistent/data \
   -e MATRIX_PASSWORD=your-matrix-password \
-  -- npx github:Vegard-/matrix-mcp-server
+  -- npx github:syvbrunnr/matrix-mcp-server
 ```
 
 ### Codex
@@ -45,7 +45,7 @@ codex mcp add matrix-server \
   --env MATRIX_HOMESERVER_URL=https://your-homeserver.com \
   --env MATRIX_DATA_DIR=/path/to/persistent/data \
   --env MATRIX_PASSWORD=your-matrix-password \
-  -- npx github:Vegard-/matrix-mcp-server
+  -- npx github:syvbrunnr/matrix-mcp-server
 ```
 
 > **Important:** Always set `MATRIX_DATA_DIR` to an absolute path. Without it, the server defaults to `{cwd}/.data`, which may vary depending on how your MCP client launches the process — causing a fresh crypto identity on every restart.
@@ -80,7 +80,7 @@ For multi-user deployments or when you want a persistent endpoint. Requires clon
 ### 1. Start the server
 
 ```bash
-git clone https://github.com/Vegard-/matrix-mcp-server.git
+git clone https://github.com/syvbrunnr/matrix-mcp-server.git
 cd matrix-mcp-server
 npm install && npm run build
 
