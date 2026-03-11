@@ -19,6 +19,7 @@ export interface QueuedMessage {
   replyToEventId?: string;
   decryptionFailed?: boolean;
   decryptionFailureReason?: string;
+  editedOriginalEventId?: string;
 }
 
 export interface QueuedReaction {
@@ -64,6 +65,8 @@ class MessageQueue extends EventEmitter {
     getSyncToken: Database.Statement;
     setSyncToken: Database.Statement;
     updateDecrypted: Database.Statement;
+    editInPlace: Database.Statement;
+    checkFetched: Database.Statement;
   };
 
   constructor() {
@@ -94,6 +97,7 @@ class MessageQueue extends EventEmitter {
         invited_by TEXT,
         decryption_failed INTEGER DEFAULT 0,
         decryption_failure_reason TEXT,
+        edited_original_event_id TEXT,
         fetched INTEGER NOT NULL DEFAULT 0
       );
 
@@ -108,6 +112,10 @@ class MessageQueue extends EventEmitter {
         value TEXT NOT NULL
       );
     `);
+    // Migration: add edited_original_event_id column if missing
+    try {
+      this.db.exec("ALTER TABLE queued_items ADD COLUMN edited_original_event_id TEXT");
+    } catch { /* column already exists */ }
   }
 
   private prepareStatements() {
@@ -115,8 +123,9 @@ class MessageQueue extends EventEmitter {
       insertMessage: this.db.prepare(`
         INSERT OR IGNORE INTO queued_items
         (event_type, event_id, room_id, room_name, sender, body, timestamp, is_dm,
-         thread_root_event_id, reply_to_event_id, decryption_failed, decryption_failure_reason)
-        VALUES ('message', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         thread_root_event_id, reply_to_event_id, decryption_failed, decryption_failure_reason,
+         edited_original_event_id)
+        VALUES ('message', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `),
       insertReaction: this.db.prepare(`
         INSERT OR IGNORE INTO queued_items
@@ -151,6 +160,12 @@ class MessageQueue extends EventEmitter {
         UPDATE queued_items SET body = ?, decryption_failed = 0, decryption_failure_reason = NULL
         WHERE event_id = ? AND fetched = 0
       `),
+      editInPlace: this.db.prepare(`
+        UPDATE queued_items SET body = ? WHERE event_id = ? AND fetched = 0
+      `),
+      checkFetched: this.db.prepare(`
+        SELECT fetched FROM queued_items WHERE event_id = ? LIMIT 1
+      `),
     };
   }
 
@@ -158,13 +173,30 @@ class MessageQueue extends EventEmitter {
     const result = this.stmts.insertMessage.run(
       msg.eventId, msg.roomId, msg.roomName, msg.sender, msg.body, msg.timestamp,
       msg.isDM ? 1 : 0, msg.threadRootEventId ?? null, msg.replyToEventId ?? null,
-      msg.decryptionFailed ? 1 : 0, msg.decryptionFailureReason ?? null
+      msg.decryptionFailed ? 1 : 0, msg.decryptionFailureReason ?? null,
+      msg.editedOriginalEventId ?? null
     );
     if (result.changes > 0) {
       this.emit("new-item", { type: "message", roomId: msg.roomId, sender: msg.sender, isDM: msg.isDM });
       return true;
     }
     return false;
+  }
+
+  /**
+   * Try to edit a queued message in place. If the original is still unfetched,
+   * update its body and return 'in-place'. If already fetched (or not found),
+   * return 'fetched' so the caller can enqueue a new edit message.
+   * Returns 'not-found' if the original event was never queued.
+   */
+  tryEditInPlace(originalEventId: string, newBody: string): "in-place" | "fetched" | "not-found" {
+    const row = this.stmts.checkFetched.get(originalEventId) as { fetched: number } | undefined;
+    if (!row) return "not-found";
+    if (row.fetched === 0) {
+      this.stmts.editInPlace.run(newBody, originalEventId);
+      return "in-place";
+    }
+    return "fetched";
   }
 
   enqueueReaction(reaction: QueuedReaction): boolean {
@@ -249,6 +281,7 @@ class MessageQueue extends EventEmitter {
             ...(row.reply_to_event_id ? { replyToEventId: row.reply_to_event_id } : {}),
             ...(row.decryption_failed ? { decryptionFailed: true } : {}),
             ...(row.decryption_failure_reason ? { decryptionFailureReason: row.decryption_failure_reason } : {}),
+            ...(row.edited_original_event_id ? { editedOriginalEventId: row.edited_original_event_id } : {}),
           });
         } else if (row.event_type === "reaction") {
           reactions.push({
@@ -350,6 +383,7 @@ class MessageQueue extends EventEmitter {
           ...(row.reply_to_event_id ? { replyToEventId: row.reply_to_event_id } : {}),
           ...(row.decryption_failed ? { decryptionFailed: true } : {}),
           ...(row.decryption_failure_reason ? { decryptionFailureReason: row.decryption_failure_reason } : {}),
+          ...(row.edited_original_event_id ? { editedOriginalEventId: row.edited_original_event_id } : {}),
         });
       } else if (row.event_type === "reaction") {
         reactions.push({

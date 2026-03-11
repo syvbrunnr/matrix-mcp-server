@@ -67,6 +67,7 @@ export const registerGetQueuedMessagesTools: ToolRegistrationFunction = (server)
               ...(m.replyToEventId ? { replyToEventId: m.replyToEventId } : {}),
               ...(m.decryptionFailed ? { decryptionFailed: true } : {}),
               ...(m.decryptionFailureReason ? { decryptionFailureReason: m.decryptionFailureReason } : {}),
+              ...(m.editedOriginalEventId ? { editedOriginalEventId: m.editedOriginalEventId } : {}),
             })),
             reactions: contents.reactions.map(r => ({
               eventId: r.eventId,

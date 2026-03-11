@@ -66,6 +66,7 @@ function extractQueuedMessage(
 
   const content = event.getClearContent?.() || event.getContent();
   const relatesTo = content?.["m.relates_to"];
+  // m.replace events are handled separately (edit logic)
   if (relatesTo?.rel_type === "m.replace") return null;
   if (event.isRedacted()) return null;
 
@@ -92,6 +93,55 @@ function extractQueuedMessage(
     ...((isEncrypted && !content?.body && (event as any).decryptionFailureReason)
       ? { decryptionFailureReason: (event as any).decryptionFailureReason } : {}),
   };
+}
+
+/**
+ * Handle an m.replace (edit) event. Tries to update the original message
+ * in-place if it's still in the queue. If already consumed, enqueues a new
+ * message with editedOriginalEventId set.
+ */
+function handleEditEvent(
+  event: MatrixEvent,
+  ownUserId: string | null,
+  dmRoomIds: Set<string>,
+  client: MatrixClient,
+  queue: ReturnType<typeof getMessageQueue>,
+): void {
+  if (event.getSender() === ownUserId) return;
+
+  const content = event.getClearContent?.() || event.getContent();
+  const relatesTo = content?.["m.relates_to"];
+  if (relatesTo?.rel_type !== "m.replace") return;
+
+  const originalEventId = relatesTo.event_id as string | undefined;
+  if (!originalEventId) return;
+
+  const newContent = content["m.new_content"];
+  const newBody = String(newContent?.body || "");
+  if (!newBody) return;
+
+  const editResult = queue.tryEditInPlace(originalEventId, newBody);
+
+  if (editResult === "fetched") {
+    // Original already consumed — enqueue as a new edit message
+    const eid = event.getId();
+    if (!eid) return;
+    const evtRoomId = event.getRoomId() || "";
+    const room = client.getRoom(evtRoomId);
+
+    queue.enqueueMessage({
+      eventId: eid,
+      roomId: evtRoomId,
+      roomName: room?.name || evtRoomId,
+      sender: event.getSender() || "",
+      body: newBody,
+      timestamp: event.getTs(),
+      isDM: dmRoomIds.has(evtRoomId),
+      editedOriginalEventId: originalEventId,
+    });
+  }
+  // "in-place" — already updated, nothing more to do
+  // "not-found" — original was never queued (e.g. own message), skip
 }
 
 /**
@@ -155,6 +205,13 @@ export async function startAutoSync(): Promise<void> {
         continue;
       }
 
+      // Handle edits (m.replace)
+      const catchupContent = event.getClearContent?.() || event.getContent();
+      if (catchupContent?.["m.relates_to"]?.rel_type === "m.replace") {
+        handleEditEvent(event, ownUserId, dmRoomIds, client, queue);
+        continue;
+      }
+
       const msg = extractQueuedMessage(event, ownUserId, dmRoomIds, client);
       if (msg) queue.enqueueMessage(msg);
     }
@@ -196,6 +253,13 @@ export async function startAutoSync(): Promise<void> {
           });
         }
       }
+      return;
+    }
+
+    // Handle edits (m.replace)
+    const liveContent = event.getClearContent?.() || event.getContent();
+    if (liveContent?.["m.relates_to"]?.rel_type === "m.replace") {
+      handleEditEvent(event, ownUserId, dmRoomIds, client, queue);
       return;
     }
 
