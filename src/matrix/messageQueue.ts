@@ -177,7 +177,7 @@ class MessageQueue extends EventEmitter {
       msg.editedOriginalEventId ?? null
     );
     if (result.changes > 0) {
-      this.emit("new-item", { type: "message", roomId: msg.roomId, sender: msg.sender, isDM: msg.isDM });
+      this.emit("new-item", { type: "message", roomId: msg.roomId, roomName: msg.roomName, sender: msg.sender, isDM: msg.isDM });
       return true;
     }
     return false;
@@ -205,7 +205,7 @@ class MessageQueue extends EventEmitter {
       reaction.timestamp, reaction.emoji, reaction.reactedToEventId
     );
     if (result.changes > 0) {
-      this.emit("new-item", { type: "reaction", roomId: reaction.roomId, sender: reaction.sender, isDM: false });
+      this.emit("new-item", { type: "reaction", roomId: reaction.roomId, roomName: reaction.roomName, sender: reaction.sender, isDM: false });
       return true;
     }
     return false;
@@ -218,7 +218,7 @@ class MessageQueue extends EventEmitter {
       invite.timestamp, invite.invitedBy
     );
     if (result.changes > 0) {
-      this.emit("new-item", { type: "invite", roomId: invite.roomId, sender: invite.invitedBy, isDM: false });
+      this.emit("new-item", { type: "invite", roomId: invite.roomId, roomName: invite.roomName, sender: invite.invitedBy, isDM: false });
       return true;
     }
     return false;

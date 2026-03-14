@@ -69,13 +69,49 @@ if (!process.env.MCP_CHILD) {
     // Send MCP notification when new messages arrive (picked up by mcp-notify proxy).
     // Only fires if the event matches an active subscription (silent by default).
     // Debounce: coalesce rapid-fire events (e.g. startup backlog) into one notification.
+    // Accumulates _hint strings across the debounce window for message-type distinction.
     let notifyTimer: ReturnType<typeof setTimeout> | null = null;
-    getMessageQueue().on("new-item", (event: { roomId: string; sender: string; isDM: boolean }) => {
+    let pendingHints: string[] = [];
+    getMessageQueue().on("new-item", (event: { type?: string; roomId: string; roomName?: string; sender: string; isDM: boolean }) => {
       if (!event || !matchesSubscription(event)) return;
+
+      // Build a brief hint string describing the event type.
+      let hint: string;
+      if (event.type === "invite") {
+        hint = "invite";
+      } else if (event.type === "reaction") {
+        hint = "reaction";
+      } else if (event.isDM) {
+        // Extract localpart from @user:domain as a brief display name
+        const localpart = event.sender.replace(/^@/, "").replace(/:.*$/, "");
+        hint = `dm:${localpart}`;
+      } else {
+        const roomLabel = event.roomName || event.roomId;
+        hint = `room:${roomLabel}`;
+      }
+      pendingHints.push(hint);
+
       if (notifyTimer) clearTimeout(notifyTimer);
       notifyTimer = setTimeout(() => {
         notifyTimer = null;
-        try { server.sendResourceListChanged(); } catch { /* transport may not be ready */ }
+        // Deduplicate hints, count occurrences
+        const hintCounts = new Map<string, number>();
+        for (const h of pendingHints) {
+          hintCounts.set(h, (hintCounts.get(h) || 0) + 1);
+        }
+        const hintSummary = Array.from(hintCounts.entries())
+          .map(([h, c]) => c > 1 ? `${c}x ${h}` : h)
+          .join(", ");
+        pendingHints = [];
+
+        try {
+          // Send notification with _hint in params for mcp-notify to parse.
+          // Uses server.server (the underlying Server instance) to send arbitrary params.
+          server.server.notification({
+            method: "notifications/resources/list_changed",
+            params: { _hint: hintSummary },
+          });
+        } catch { /* transport may not be ready */ }
       }, 3000);
     });
   }
