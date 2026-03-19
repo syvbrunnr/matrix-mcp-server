@@ -4,6 +4,7 @@ import { createConfiguredMatrixClient, getAccessToken, getMatrixContext } from "
 import { removeClientFromCache } from "../../matrix/client.js";
 import { shouldEvictClientCache } from "../../utils/matrix-errors.js";
 import { ToolRegistrationFunction } from "../../types/tool-types.js";
+import { getSubscription, setSubscription } from "../../matrix/notificationSubscriptions.js";
 
 // Tool: Create room
 export const createRoomHandler = async (
@@ -157,6 +158,12 @@ export const joinRoomHandler = async (
     const room = client.getRoom(roomId);
     const roomName = room?.name || "Unnamed Room";
     const memberCount = room?.getJoinedMemberCount() || "Unknown";
+
+    // Auto-add to subscription so messages from newly joined room are notified
+    const sub = getSubscription();
+    if (sub && !sub.all) {
+      setSubscription({ ...sub, rooms: [...new Set([...(sub.rooms ?? []), roomId])] });
+    }
 
     return {
       content: [
