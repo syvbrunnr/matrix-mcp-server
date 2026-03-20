@@ -50,6 +50,7 @@ function mockRoom(name: string = "Test Room") {
         { getId: () => "$e2", getType: () => "m.room.message" },
         { getId: () => "$e3", getType: () => "m.room.message" },
       ],
+      getPaginationToken: () => null,
     }),
   };
 }
@@ -96,7 +97,7 @@ describe("getRoomMessagesHandler", () => {
     const room = {
       name: "Empty Room",
       roomId: "!empty:ex.com",
-      getLiveTimeline: () => ({ getEvents: () => [] }),
+      getLiveTimeline: () => ({ getEvents: () => [], getPaginationToken: () => null }),
     };
     const client = { getRoom: () => room };
     mockCreateClient.mockResolvedValue(client as any);
@@ -122,6 +123,67 @@ describe("getRoomMessagesHandler", () => {
     const result = await getRoomMessagesHandler({ roomId: "!room:ex.com", limit: 20 }, reqContext);
     expect(result.isError).toBe(true);
     expect(result.content[0].text).toContain("get-server-health");
+  });
+
+  it("includes nextPageToken when backward pagination token exists", async () => {
+    const room = {
+      name: "Test Room",
+      roomId: "!room:ex.com",
+      getLiveTimeline: () => ({
+        getEvents: () => [
+          { getId: () => "$e1", getType: () => "m.room.message" },
+        ],
+        getPaginationToken: () => "t123_backward",
+      }),
+    };
+    const client = { getRoom: () => room };
+    mockCreateClient.mockResolvedValue(client as any);
+    mockProcessMessage.mockResolvedValue({ type: "text", text: "msg" } as any);
+
+    const result = await getRoomMessagesHandler({ roomId: "!room:ex.com", limit: 20 }, reqContext);
+    expect(result.isError).toBeUndefined();
+    const lastContent = result.content[result.content.length - 1];
+    expect(lastContent.text).toBe("__nextPageToken:t123_backward");
+  });
+
+  it("fetches from server API when paginationToken provided", async () => {
+    const room = { name: "Test Room", roomId: "!room:ex.com" };
+    const mockCreateMessagesRequest = jest.fn<any>().mockResolvedValue({
+      chunk: [
+        { event_id: "$old1", type: "m.room.message", sender: "@alice:ex.com", content: { body: "old msg" }, origin_server_ts: 1000 },
+      ],
+      end: "t456_next",
+    });
+    const client = { getRoom: () => room, createMessagesRequest: mockCreateMessagesRequest };
+    mockCreateClient.mockResolvedValue(client as any);
+    mockProcessMessage.mockResolvedValue({ type: "text", text: '{"body":"old msg"}' } as any);
+
+    const result = await getRoomMessagesHandler(
+      { roomId: "!room:ex.com", limit: 20, paginationToken: "t123_start" },
+      reqContext
+    );
+    expect(result.isError).toBeUndefined();
+    expect(mockCreateMessagesRequest).toHaveBeenCalledWith("!room:ex.com", "t123_start", 20, "b");
+    const lastContent = result.content[result.content.length - 1];
+    expect(lastContent.text).toBe("__nextPageToken:t456_next");
+  });
+
+  it("returns no nextPageToken when server response has no end token", async () => {
+    const room = { name: "Test Room", roomId: "!room:ex.com" };
+    const mockCreateMessagesRequest = jest.fn<any>().mockResolvedValue({
+      chunk: [
+        { event_id: "$old1", type: "m.room.message", sender: "@alice:ex.com", content: { body: "msg" }, origin_server_ts: 1000 },
+      ],
+    });
+    const client = { getRoom: () => room, createMessagesRequest: mockCreateMessagesRequest };
+    mockCreateClient.mockResolvedValue(client as any);
+    mockProcessMessage.mockResolvedValue({ type: "text", text: "msg" } as any);
+
+    const result = await getRoomMessagesHandler(
+      { roomId: "!room:ex.com", limit: 10, paginationToken: "t_token" },
+      reqContext
+    );
+    expect(result.content.every((c: any) => !c.text?.startsWith("__nextPageToken:"))).toBe(true);
   });
 });
 

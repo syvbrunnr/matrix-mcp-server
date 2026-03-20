@@ -1,5 +1,7 @@
 import { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
+import { MatrixEvent } from "matrix-js-sdk";
+import { Direction } from "matrix-js-sdk/lib/models/event-timeline.js";
 import { createConfiguredMatrixClient, getAccessToken, getMatrixContext } from "../../utils/server-helpers.js";
 import { removeClientFromCache } from "../../matrix/client.js";
 import { shouldEvictClientCache, getDiagnosticHint } from "../../utils/matrix-errors.js";
@@ -9,12 +11,12 @@ import { sendReadReceipt } from "../../utils/read-receipt.js";
 
 // Tool: Get room messages
 export const getRoomMessagesHandler = async (
-  { roomId, limit }: { roomId: string; limit: number },
+  { roomId, limit, paginationToken }: { roomId: string; limit: number; paginationToken?: string },
   { requestInfo, authInfo }: any
 ) => {
   const { matrixUserId, homeserverUrl } = getMatrixContext(requestInfo?.headers);
   const accessToken = getAccessToken(requestInfo?.headers, authInfo?.token);
-  
+
   try {
     const client = await createConfiguredMatrixClient(homeserverUrl, matrixUserId, accessToken);
 
@@ -31,6 +33,30 @@ export const getRoomMessagesHandler = async (
       };
     }
 
+    // Paginated mode: fetch from server-side /messages API
+    if (paginationToken) {
+      const response = await client.createMessagesRequest(
+        roomId, paginationToken, limit, Direction.Backward,
+      );
+
+      const events = (response.chunk || []).map((raw: any) => new MatrixEvent(raw));
+      const messages = await Promise.all(
+        events.map((event: MatrixEvent) => processMessage(event, client))
+      );
+      const validMessages = messages.filter((m) => m !== null);
+
+      const result: any[] = validMessages.length > 0
+        ? validMessages
+        : [{ type: "text" as const, text: `No messages found in room ${room.name || roomId}` }];
+
+      if (response.end) {
+        result.push({ type: "text" as const, text: `__nextPageToken:${response.end}` });
+      }
+
+      return { content: result };
+    }
+
+    // Default mode: synced timeline
     const messages = await Promise.all(
       room
         .getLiveTimeline()
@@ -43,17 +69,17 @@ export const getRoomMessagesHandler = async (
 
     sendReadReceipt(client, room);
 
-    return {
-      content:
-        validMessages.length > 0
-          ? validMessages
-          : [
-              {
-                type: "text",
-                text: `No messages found in room ${room.name || roomId}`,
-              },
-            ],
-    };
+    const result: any[] = validMessages.length > 0
+      ? validMessages
+      : [{ type: "text" as const, text: `No messages found in room ${room.name || roomId}` }];
+
+    // Include pagination token for fetching older messages
+    const backwardToken = room.getLiveTimeline().getPaginationToken(Direction.Backward);
+    if (backwardToken) {
+      result.push({ type: "text" as const, text: `__nextPageToken:${backwardToken}` });
+    }
+
+    return { content: result };
   } catch (error: any) {
     console.error(`Failed to get room messages: ${error.message}`);
     if (shouldEvictClientCache(error)) removeClientFromCache(matrixUserId, homeserverUrl);
@@ -188,17 +214,26 @@ export const registerMessageTools: ToolRegistrationFunction = (server) => {
     {
       title: "Get Matrix Room Messages",
       description:
-        "Retrieve recent messages from a specific Matrix room, including text and image content. " +
-        "Each text message is returned as a JSON object with fields: eventId, sender, timestamp, body, " +
+        "Retrieve messages from a Matrix room. Without paginationToken, returns recent messages " +
+        "from the synced timeline. With paginationToken, fetches older messages from the server " +
+        "using the Matrix /messages API (supports full room history, not just synced events). " +
+        "Each text message is a JSON object with: eventId, sender, timestamp, body, " +
         "and optionally replyToEventId and threadRootEventId. " +
-        "Use eventId with send-message's replyToEventId to reply to a message, " +
-        "or with threadRootEventId to continue a thread.",
+        "Response includes a __nextPageToken entry when more messages are available — " +
+        "pass its value as paginationToken to fetch the next page.",
       inputSchema: {
         roomId: z.string().describe("Matrix room ID (e.g., !roomid:domain.com)"),
         limit: z.coerce
           .number()
           .default(20)
           .describe("Maximum number of messages to retrieve (default: 20)"),
+        paginationToken: z
+          .string()
+          .optional()
+          .describe(
+            "Token for fetching older messages. Omit for recent synced messages. " +
+            "Use the __nextPageToken value from a previous response to page backward through history."
+          ),
       },
       annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
     },
