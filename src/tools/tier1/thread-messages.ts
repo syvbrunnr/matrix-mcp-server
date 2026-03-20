@@ -8,15 +8,143 @@ import { ToolRegistrationFunction } from "../../types/tool-types.js";
 // Rel types to try, in preference order (Dendrite uses io.element.thread)
 const THREAD_REL_TYPES = ["io.element.thread", "m.thread"];
 
+export const getThreadMessagesHandler = async (
+  { roomId, threadRootEventId, limit, paginationToken }: {
+    roomId: string; threadRootEventId: string; limit: number; paginationToken?: string;
+  },
+  { requestInfo, authInfo }: any
+) => {
+  const { matrixUserId, homeserverUrl } = getMatrixContext(requestInfo?.headers);
+  const accessToken = getAccessToken(requestInfo?.headers, authInfo?.token);
+
+  try {
+    const client = await createConfiguredMatrixClient(homeserverUrl, matrixUserId, accessToken);
+
+    // Try each thread rel type until we find replies
+    let allEvents: any[] = [];
+    let originalEvent: any = null;
+    let nextBatch: string | null | undefined = null;
+
+    for (const relType of THREAD_REL_TYPES) {
+      try {
+        const result = await client.relations(
+          roomId,
+          threadRootEventId,
+          relType,
+          EventType.RoomMessage,
+          { limit, dir: "b" as any, ...(paginationToken ? { from: paginationToken } : {}) }
+        );
+        if (result.originalEvent) originalEvent = result.originalEvent;
+        nextBatch = result.nextBatch;
+        if (result.events.length > 0) {
+          allEvents = result.events;
+          break;
+        }
+      } catch (e) {
+        // Try next rel type
+      }
+    }
+
+    // If relations API gave nothing and no pagination token, fall back to scanning main timeline
+    if (allEvents.length === 0 && !paginationToken) {
+      const room = client.getRoom(roomId);
+      if (room) {
+        const timelineEvents = room.getLiveTimeline().getEvents();
+        allEvents = timelineEvents.filter((event) => {
+          const evtType = event.getType();
+          if (evtType !== EventType.RoomMessage && evtType !== EventType.RoomMessageEncrypted) return false;
+          const content = event.getClearContent?.() || event.getContent();
+          const relatesTo = content?.["m.relates_to"];
+          return (
+            (relatesTo?.rel_type === "io.element.thread" || relatesTo?.rel_type === "m.thread") &&
+            relatesTo?.event_id === threadRootEventId
+          );
+        });
+      }
+    }
+
+    // Sort oldest first (relations API returns newest first)
+    allEvents = allEvents
+      .filter((e) => {
+        const relatesTo = e.getContent()?.["m.relates_to"];
+        return relatesTo?.rel_type !== "m.replace" && !e.isRedacted();
+      })
+      .sort((a: any, b: any) => a.getTs() - b.getTs())
+      .slice(0, limit);
+
+    // Format root event if available (only on first page)
+    const messages: string[] = [];
+
+    if (originalEvent && !paginationToken) {
+      const rootContent = originalEvent.getContent();
+      if (rootContent?.msgtype === "m.text") {
+        messages.push(JSON.stringify({
+          eventId: originalEvent.getId(),
+          sender: originalEvent.getSender(),
+          timestamp: new Date(originalEvent.getTs()).toISOString(),
+          body: String(rootContent.body || ""),
+          isThreadRoot: true,
+        }));
+      }
+    }
+
+    for (const event of allEvents) {
+      const content = event.getClearContent?.() || event.getContent();
+      const isEncrypted = event.getType() === EventType.RoomMessageEncrypted;
+      if (!isEncrypted && content?.msgtype !== "m.text") continue;
+      const relatesTo = content?.["m.relates_to"];
+      const metadata: Record<string, any> = {
+        eventId: event.getId(),
+        sender: event.getSender(),
+        timestamp: new Date(event.getTs()).toISOString(),
+        body: String(content?.body || (isEncrypted ? "[encrypted]" : "")),
+        threadRootEventId,
+      };
+      if (isEncrypted && !content?.body) {
+        metadata.decryptionFailed = true;
+        const reason = (event as any).decryptionFailureReason;
+        if (reason) metadata.decryptionFailureReason = reason;
+      }
+      if (relatesTo?.["m.in_reply_to"]?.event_id) {
+        metadata.replyToEventId = relatesTo["m.in_reply_to"].event_id;
+      }
+      messages.push(JSON.stringify(metadata));
+    }
+
+    if (messages.length === 0) {
+      return {
+        content: [{ type: "text" as const, text: `No messages found in thread ${threadRootEventId}` }],
+      };
+    }
+
+    const result = messages.map((m) => ({ type: "text" as const, text: m }));
+
+    if (nextBatch) {
+      result.push({ type: "text" as const, text: `__nextPageToken:${nextBatch}` });
+    }
+
+    return { content: result };
+  } catch (error: any) {
+    console.error(`Failed to get thread messages: ${error.message}`);
+    if (shouldEvictClientCache(error)) removeClientFromCache(matrixUserId, homeserverUrl);
+    return {
+      content: [{ type: "text" as const, text: `Error: Failed to get thread messages - ${error.message}\n${getDiagnosticHint(error)}` }],
+      isError: true,
+    };
+  }
+};
+
 export const registerThreadMessageTools: ToolRegistrationFunction = (server) => {
   server.registerTool(
     "get-thread-messages",
     {
       title: "Get Thread Messages",
       description:
-        "Retrieve all messages in a specific thread. " +
+        "Retrieve messages in a specific thread from the server-side relations API (full history). " +
         "Use the threadRootEventId from a previous get-room-messages or wait-for-messages call. " +
-        "Returns the thread root event plus all replies, ordered oldest first.",
+        "Returns the thread root event plus replies, ordered oldest first. " +
+        "Response includes a __nextPageToken entry when more replies exist — " +
+        "pass its value as paginationToken to fetch the next page.",
       inputSchema: {
         roomId: z.string().describe("Matrix room ID (e.g., !roomid:domain.com)"),
         threadRootEventId: z
@@ -26,125 +154,16 @@ export const registerThreadMessageTools: ToolRegistrationFunction = (server) => 
           .number()
           .default(50)
           .describe("Maximum number of thread replies to return (default: 50)"),
+        paginationToken: z
+          .string()
+          .optional()
+          .describe(
+            "Token for fetching more thread replies. " +
+            "Use the __nextPageToken value from a previous response to page through long threads."
+          ),
       },
       annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
     },
-    async (
-      { roomId, threadRootEventId, limit }: { roomId: string; threadRootEventId: string; limit: number },
-      { requestInfo, authInfo }: any
-    ) => {
-      const { matrixUserId, homeserverUrl } = getMatrixContext(requestInfo?.headers);
-      const accessToken = getAccessToken(requestInfo?.headers, authInfo?.token);
-
-      try {
-        const client = await createConfiguredMatrixClient(homeserverUrl, matrixUserId, accessToken);
-
-        // Try each thread rel type until we find replies
-        let allEvents: any[] = [];
-        let originalEvent: any = null;
-
-        for (const relType of THREAD_REL_TYPES) {
-          try {
-            const result = await client.relations(
-              roomId,
-              threadRootEventId,
-              relType,
-              EventType.RoomMessage,
-              { limit, dir: "b" as any }
-            );
-            if (result.originalEvent) originalEvent = result.originalEvent;
-            if (result.events.length > 0) {
-              allEvents = result.events;
-              break;
-            }
-          } catch (e) {
-            // Try next rel type
-          }
-        }
-
-        // If relations API gave nothing, fall back to scanning main timeline
-        if (allEvents.length === 0) {
-          const room = client.getRoom(roomId);
-          if (room) {
-            const timelineEvents = room.getLiveTimeline().getEvents();
-            allEvents = timelineEvents.filter((event) => {
-              const evtType = event.getType();
-              if (evtType !== EventType.RoomMessage && evtType !== EventType.RoomMessageEncrypted) return false;
-              const content = event.getClearContent?.() || event.getContent();
-              const relatesTo = content?.["m.relates_to"];
-              return (
-                (relatesTo?.rel_type === "io.element.thread" || relatesTo?.rel_type === "m.thread") &&
-                relatesTo?.event_id === threadRootEventId
-              );
-            });
-          }
-        }
-
-        // Sort oldest first (relations API returns newest first)
-        allEvents = allEvents
-          .filter((e) => {
-            const relatesTo = e.getContent()?.["m.relates_to"];
-            return relatesTo?.rel_type !== "m.replace" && !e.isRedacted();
-          })
-          .sort((a: any, b: any) => a.getTs() - b.getTs())
-          .slice(0, limit);
-
-        // Format root event if available
-        const messages: string[] = [];
-
-        if (originalEvent) {
-          const rootContent = originalEvent.getContent();
-          if (rootContent?.msgtype === "m.text") {
-            messages.push(JSON.stringify({
-              eventId: originalEvent.getId(),
-              sender: originalEvent.getSender(),
-              timestamp: new Date(originalEvent.getTs()).toISOString(),
-              body: String(rootContent.body || ""),
-              isThreadRoot: true,
-            }));
-          }
-        }
-
-        for (const event of allEvents) {
-          const content = event.getClearContent?.() || event.getContent();
-          const isEncrypted = event.getType() === EventType.RoomMessageEncrypted;
-          if (!isEncrypted && content?.msgtype !== "m.text") continue;
-          const relatesTo = content?.["m.relates_to"];
-          const metadata: Record<string, any> = {
-            eventId: event.getId(),
-            sender: event.getSender(),
-            timestamp: new Date(event.getTs()).toISOString(),
-            body: String(content?.body || (isEncrypted ? "[encrypted]" : "")),
-            threadRootEventId,
-          };
-          if (isEncrypted && !content?.body) {
-            metadata.decryptionFailed = true;
-            const reason = (event as any).decryptionFailureReason;
-            if (reason) metadata.decryptionFailureReason = reason;
-          }
-          if (relatesTo?.["m.in_reply_to"]?.event_id) {
-            metadata.replyToEventId = relatesTo["m.in_reply_to"].event_id;
-          }
-          messages.push(JSON.stringify(metadata));
-        }
-
-        if (messages.length === 0) {
-          return {
-            content: [{ type: "text" as const, text: `No messages found in thread ${threadRootEventId}` }],
-          };
-        }
-
-        return {
-          content: messages.map((m) => ({ type: "text" as const, text: m })),
-        };
-      } catch (error: any) {
-        console.error(`Failed to get thread messages: ${error.message}`);
-        if (shouldEvictClientCache(error)) removeClientFromCache(matrixUserId, homeserverUrl);
-        return {
-          content: [{ type: "text" as const, text: `Error: Failed to get thread messages - ${error.message}\n${getDiagnosticHint(error)}` }],
-          isError: true,
-        };
-      }
-    }
+    getThreadMessagesHandler
   );
 };
