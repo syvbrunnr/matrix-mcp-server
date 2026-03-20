@@ -196,13 +196,15 @@ export class MessageQueue extends EventEmitter {
    * Returns 'not-found' if the original event was never queued.
    */
   tryEditInPlace(originalEventId: string, newBody: string): "in-place" | "fetched" | "not-found" {
-    const row = this.stmts.checkFetched.get(originalEventId) as { fetched: number } | undefined;
-    if (!row) return "not-found";
-    if (row.fetched === 0) {
-      this.stmts.editInPlace.run(newBody, originalEventId);
-      return "in-place";
-    }
-    return "fetched";
+    return this.db.transaction(() => {
+      const row = this.stmts.checkFetched.get(originalEventId) as { fetched: number } | undefined;
+      if (!row) return "not-found" as const;
+      if (row.fetched === 0) {
+        this.stmts.editInPlace.run(newBody, originalEventId);
+        return "in-place" as const;
+      }
+      return "fetched" as const;
+    })();
   }
 
   enqueueReaction(reaction: QueuedReaction): boolean {
@@ -235,23 +237,25 @@ export class MessageQueue extends EventEmitter {
   }
 
   peek(): QueuePeek {
-    const counts = this.stmts.peekCounts.all() as { event_type: string; cnt: number }[];
-    const rooms = this.stmts.peekRooms.all() as { room_id: string; room_name: string; cnt: number }[];
+    return this.db.transaction(() => {
+      const counts = this.stmts.peekCounts.all() as { event_type: string; cnt: number }[];
+      const rooms = this.stmts.peekRooms.all() as { room_id: string; room_name: string; cnt: number }[];
 
-    const types = { messages: 0, reactions: 0, invites: 0 };
-    let total = 0;
-    for (const row of counts) {
-      if (row.event_type === "message") types.messages = row.cnt;
-      else if (row.event_type === "reaction") types.reactions = row.cnt;
-      else if (row.event_type === "invite") types.invites = row.cnt;
-      total += row.cnt;
-    }
+      const types = { messages: 0, reactions: 0, invites: 0 };
+      let total = 0;
+      for (const row of counts) {
+        if (row.event_type === "message") types.messages = row.cnt;
+        else if (row.event_type === "reaction") types.reactions = row.cnt;
+        else if (row.event_type === "invite") types.invites = row.cnt;
+        total += row.cnt;
+      }
 
-    return {
-      count: total,
-      types,
-      rooms: rooms.map(r => ({ roomId: r.room_id, roomName: r.room_name, count: r.cnt })),
-    };
+      return {
+        count: total,
+        types,
+        rooms: rooms.map(r => ({ roomId: r.room_id, roomName: r.room_name, count: r.cnt })),
+      };
+    })();
   }
 
   peekRoom(roomId: string): QueuePeek {

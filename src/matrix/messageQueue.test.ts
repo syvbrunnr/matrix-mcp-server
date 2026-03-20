@@ -412,4 +412,83 @@ describe("MessageQueue", () => {
       expect(cleaned).toBe(0);
     });
   });
+
+  describe("transaction isolation", () => {
+    it("dequeue atomically selects and marks items — no double-delivery", () => {
+      queue.enqueueMessage(makeMessage({ eventId: "$a", body: "A" }));
+      queue.enqueueMessage(makeMessage({ eventId: "$b", body: "B" }));
+
+      const first = queue.dequeue();
+      const second = queue.dequeue();
+
+      expect(first.messages).toHaveLength(2);
+      expect(second.messages).toHaveLength(0);
+    });
+
+    it("dequeue with roomId filter does not affect other rooms", () => {
+      queue.enqueueMessage(makeMessage({ eventId: "$x", roomId: "!x:ex.com", body: "X" }));
+      queue.enqueueMessage(makeMessage({ eventId: "$y", roomId: "!y:ex.com", body: "Y" }));
+
+      const result = queue.dequeue("!x:ex.com");
+      expect(result.messages).toHaveLength(1);
+      expect(result.messages[0].body).toBe("X");
+
+      // Other room still has its message
+      const remaining = queue.dequeue("!y:ex.com");
+      expect(remaining.messages).toHaveLength(1);
+      expect(remaining.messages[0].body).toBe("Y");
+    });
+
+    it("tryEditInPlace is atomic — edit succeeds only if still unfetched", () => {
+      const msg = makeMessage({ eventId: "$race", body: "original" });
+      queue.enqueueMessage(msg);
+
+      // Edit while still unfetched — should succeed
+      expect(queue.tryEditInPlace("$race", "edited")).toBe("in-place");
+
+      // Dequeue marks it fetched
+      const { messages } = queue.dequeue();
+      expect(messages[0].body).toBe("edited");
+
+      // Now editing should return "fetched"
+      expect(queue.tryEditInPlace("$race", "too late")).toBe("fetched");
+    });
+
+    it("peek returns consistent counts and room breakdown", () => {
+      queue.enqueueMessage(makeMessage({ roomId: "!r:ex.com", roomName: "R" }));
+      queue.enqueueMessage(makeMessage({ roomId: "!r:ex.com", roomName: "R" }));
+      queue.enqueueReaction(makeReaction({ roomId: "!r:ex.com" }));
+
+      const peek = queue.peek();
+      // Total should equal sum of type counts
+      expect(peek.count).toBe(peek.types.messages + peek.types.reactions + peek.types.invites);
+      expect(peek.types.messages).toBe(2);
+      expect(peek.types.reactions).toBe(1);
+      // Room breakdown should match message count
+      expect(peek.rooms).toHaveLength(1);
+      expect(peek.rooms[0].count).toBe(2);
+    });
+
+    it("concurrent enqueue and dequeue do not lose items", () => {
+      // Enqueue several items
+      for (let i = 0; i < 10; i++) {
+        queue.enqueueMessage(makeMessage({ body: `msg-${i}` }));
+      }
+
+      // Dequeue all
+      const result = queue.dequeue();
+      expect(result.messages).toHaveLength(10);
+
+      // Enqueue more after dequeue
+      for (let i = 10; i < 15; i++) {
+        queue.enqueueMessage(makeMessage({ body: `msg-${i}` }));
+      }
+
+      const result2 = queue.dequeue();
+      expect(result2.messages).toHaveLength(5);
+
+      // Nothing left
+      expect(queue.peek().count).toBe(0);
+    });
+  });
 });
