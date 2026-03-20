@@ -6,6 +6,131 @@ import { getPhase2Status } from "../../matrix/e2eeStatus.js";
 import { getCacheStats } from "../../matrix/clientCache.js";
 import { getMatrixContext } from "../../utils/server-helpers.js";
 
+export const restartServerHandler = async () => {
+  // Send response first, then exit after a short delay
+  setTimeout(() => process.exit(0), 200);
+  return {
+    content: [
+      {
+        type: "text" as const,
+        text: "Restarting Matrix MCP server — Claude Code will reconnect automatically.",
+      },
+    ],
+  };
+};
+
+export const getPipelineMetricsHandler = async () => {
+  const metrics = getMetrics();
+  const queue = getMessageQueue().peek();
+  const uptime = metrics.firstEventAt
+    ? Math.round((Date.now() - metrics.firstEventAt) / 1000)
+    : 0;
+
+  const lines = [
+    `Pipeline Metrics (uptime: ${uptime}s)`,
+    `  Events received:      ${metrics.eventsReceived}`,
+    `  Messages enqueued:    ${metrics.messagesEnqueued}`,
+    `  Messages filtered:    ${metrics.messagesFiltered}`,
+    `  Messages deduplicated:${metrics.messagesDeduplicated}`,
+    `  Reactions enqueued:   ${metrics.reactionsEnqueued}`,
+    `  Edits processed:     ${metrics.editsProcessed}`,
+    `  Listener errors:     ${metrics.listenerErrors}`,
+    ``,
+    `Queue state:`,
+    `  Pending messages:    ${queue.types.messages}`,
+    `  Pending reactions:   ${queue.types.reactions}`,
+    `  Pending invites:     ${queue.types.invites}`,
+  ];
+
+  if (metrics.lastEventAt) {
+    const ago = Math.round((Date.now() - metrics.lastEventAt) / 1000);
+    lines.push(`  Last event:          ${ago}s ago`);
+  }
+
+  return {
+    content: [{ type: "text" as const, text: lines.join("\n") }],
+  };
+};
+
+export const getServerHealthHandler = async () => {
+  // Sync state (enhanced with liveness probe data)
+  const syncRunning = isAutoSyncRunning();
+  const syncState = getAutoSyncState();
+  const syncHealth = getSyncHealth();
+
+  // E2EE status
+  let e2ee: Record<string, any> | undefined;
+  try {
+    const { matrixUserId, homeserverUrl } = getMatrixContext(undefined);
+    const phase2 = getPhase2Status(matrixUserId, homeserverUrl);
+    e2ee = {
+      userId: matrixUserId,
+      phase2State: phase2?.state ?? "not_started",
+      ...(phase2?.error ? { error: phase2.error } : {}),
+      ...(phase2?.retryCount ? { retryCount: phase2.retryCount } : {}),
+      ...(phase2?.startedAt ? { startedAt: new Date(phase2.startedAt).toISOString() } : {}),
+      ...(phase2?.completedAt ? { completedAt: new Date(phase2.completedAt).toISOString() } : {}),
+    };
+  } catch {
+    e2ee = { error: "Matrix context not configured" };
+  }
+
+  // Queue state
+  const queue = getMessageQueue().peek();
+
+  // Pipeline metrics
+  const metrics = getMetrics();
+  const pipelineUptime = metrics.firstEventAt
+    ? Math.round((Date.now() - metrics.firstEventAt) / 1000)
+    : 0;
+
+  // Client cache
+  const cache = getCacheStats();
+
+  // Process info
+  const mem = process.memoryUsage();
+
+  const health = {
+    status: syncRunning && syncState === "SYNCING" && !syncHealth.stale ? "healthy" : "degraded",
+    sync: {
+      running: syncRunning,
+      state: syncState ?? "not_started",
+      stale: syncHealth.stale,
+      consecutiveUnhealthy: syncHealth.consecutiveUnhealthy,
+      totalReconnects: syncHealth.totalReconnects,
+      ...(syncHealth.lastReconnectSecondsAgo !== null ? { lastReconnectSecondsAgo: syncHealth.lastReconnectSecondsAgo } : {}),
+    },
+    e2ee,
+    queue: {
+      pending: queue.count,
+      messages: queue.types.messages,
+      reactions: queue.types.reactions,
+      invites: queue.types.invites,
+    },
+    pipeline: {
+      uptimeSeconds: pipelineUptime,
+      eventsReceived: metrics.eventsReceived,
+      messagesEnqueued: metrics.messagesEnqueued,
+      listenerErrors: metrics.listenerErrors,
+      lastEventSecondsAgo: metrics.lastEventAt
+        ? Math.round((Date.now() - metrics.lastEventAt) / 1000)
+        : null,
+    },
+    clientCache: {
+      activeClients: cache.size,
+    },
+    process: {
+      uptimeSeconds: Math.round(process.uptime()),
+      heapUsedMB: Math.round(mem.heapUsed / 1024 / 1024),
+      rssMB: Math.round(mem.rss / 1024 / 1024),
+    },
+  };
+
+  return {
+    content: [{ type: "text" as const, text: JSON.stringify(health, null, 2) }],
+  };
+};
+
 export const registerServerAdminTools: ToolRegistrationFunction = (server) => {
   server.registerTool(
     "restart-server",
@@ -18,18 +143,7 @@ export const registerServerAdminTools: ToolRegistrationFunction = (server) => {
       inputSchema: {},
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
     },
-    async () => {
-      // Send response first, then exit after a short delay
-      setTimeout(() => process.exit(0), 200);
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: "Restarting Matrix MCP server — Claude Code will reconnect automatically.",
-          },
-        ],
-      };
-    }
+    restartServerHandler
   );
 
   server.registerTool(
@@ -43,38 +157,7 @@ export const registerServerAdminTools: ToolRegistrationFunction = (server) => {
       inputSchema: {},
       annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
     },
-    async () => {
-      const metrics = getMetrics();
-      const queue = getMessageQueue().peek();
-      const uptime = metrics.firstEventAt
-        ? Math.round((Date.now() - metrics.firstEventAt) / 1000)
-        : 0;
-
-      const lines = [
-        `Pipeline Metrics (uptime: ${uptime}s)`,
-        `  Events received:      ${metrics.eventsReceived}`,
-        `  Messages enqueued:    ${metrics.messagesEnqueued}`,
-        `  Messages filtered:    ${metrics.messagesFiltered}`,
-        `  Messages deduplicated:${metrics.messagesDeduplicated}`,
-        `  Reactions enqueued:   ${metrics.reactionsEnqueued}`,
-        `  Edits processed:     ${metrics.editsProcessed}`,
-        `  Listener errors:     ${metrics.listenerErrors}`,
-        ``,
-        `Queue state:`,
-        `  Pending messages:    ${queue.types.messages}`,
-        `  Pending reactions:   ${queue.types.reactions}`,
-        `  Pending invites:     ${queue.types.invites}`,
-      ];
-
-      if (metrics.lastEventAt) {
-        const ago = Math.round((Date.now() - metrics.lastEventAt) / 1000);
-        lines.push(`  Last event:          ${ago}s ago`);
-      }
-
-      return {
-        content: [{ type: "text" as const, text: lines.join("\n") }],
-      };
-    }
+    getPipelineMetricsHandler
   );
 
   server.registerTool(
@@ -88,83 +171,6 @@ export const registerServerAdminTools: ToolRegistrationFunction = (server) => {
       inputSchema: {},
       annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
     },
-    async () => {
-      // Sync state (enhanced with liveness probe data)
-      const syncRunning = isAutoSyncRunning();
-      const syncState = getAutoSyncState();
-      const syncHealth = getSyncHealth();
-
-      // E2EE status
-      let e2ee: Record<string, any> | undefined;
-      try {
-        const { matrixUserId, homeserverUrl } = getMatrixContext(undefined);
-        const phase2 = getPhase2Status(matrixUserId, homeserverUrl);
-        e2ee = {
-          userId: matrixUserId,
-          phase2State: phase2?.state ?? "not_started",
-          ...(phase2?.error ? { error: phase2.error } : {}),
-          ...(phase2?.retryCount ? { retryCount: phase2.retryCount } : {}),
-          ...(phase2?.startedAt ? { startedAt: new Date(phase2.startedAt).toISOString() } : {}),
-          ...(phase2?.completedAt ? { completedAt: new Date(phase2.completedAt).toISOString() } : {}),
-        };
-      } catch {
-        e2ee = { error: "Matrix context not configured" };
-      }
-
-      // Queue state
-      const queue = getMessageQueue().peek();
-
-      // Pipeline metrics
-      const metrics = getMetrics();
-      const pipelineUptime = metrics.firstEventAt
-        ? Math.round((Date.now() - metrics.firstEventAt) / 1000)
-        : 0;
-
-      // Client cache
-      const cache = getCacheStats();
-
-      // Process info
-      const mem = process.memoryUsage();
-
-      const health = {
-        status: syncRunning && syncState === "SYNCING" && !syncHealth.stale ? "healthy" : "degraded",
-        sync: {
-          running: syncRunning,
-          state: syncState ?? "not_started",
-          stale: syncHealth.stale,
-          consecutiveUnhealthy: syncHealth.consecutiveUnhealthy,
-          totalReconnects: syncHealth.totalReconnects,
-          ...(syncHealth.lastReconnectSecondsAgo !== null ? { lastReconnectSecondsAgo: syncHealth.lastReconnectSecondsAgo } : {}),
-        },
-        e2ee,
-        queue: {
-          pending: queue.count,
-          messages: queue.types.messages,
-          reactions: queue.types.reactions,
-          invites: queue.types.invites,
-        },
-        pipeline: {
-          uptimeSeconds: pipelineUptime,
-          eventsReceived: metrics.eventsReceived,
-          messagesEnqueued: metrics.messagesEnqueued,
-          listenerErrors: metrics.listenerErrors,
-          lastEventSecondsAgo: metrics.lastEventAt
-            ? Math.round((Date.now() - metrics.lastEventAt) / 1000)
-            : null,
-        },
-        clientCache: {
-          activeClients: cache.size,
-        },
-        process: {
-          uptimeSeconds: Math.round(process.uptime()),
-          heapUsedMB: Math.round(mem.heapUsed / 1024 / 1024),
-          rssMB: Math.round(mem.rss / 1024 / 1024),
-        },
-      };
-
-      return {
-        content: [{ type: "text" as const, text: JSON.stringify(health, null, 2) }],
-      };
-    }
+    getServerHealthHandler
   );
 };
