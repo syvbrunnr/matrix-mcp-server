@@ -14,6 +14,7 @@ import { getMessageQueue, QueuedMessage } from "./messageQueue.js";
 import { getCachedClient } from "./clientCache.js";
 import { readFileSync } from "fs";
 import path from "path";
+import { increment } from "./pipelineMetrics.js";
 
 const DATA_DIR = process.env.MATRIX_DATA_DIR ?? path.join(process.cwd(), ".data");
 const KEEPALIVE_INTERVAL_MS = 5 * 60 * 1000;
@@ -234,6 +235,7 @@ export async function startAutoSync(): Promise<void> {
   // --- Live event listeners ---
   client.on(RoomEvent.Timeline, (event: MatrixEvent) => {
     try {
+      increment("eventsReceived");
       const evtType = event.getType();
       const evtRoomId = event.getRoomId() || "";
 
@@ -252,6 +254,7 @@ export async function startAutoSync(): Promise<void> {
               reactedToEventId: relatesTo.event_id,
               timestamp: event.getTs(),
             });
+            increment("reactionsEnqueued");
           }
         }
         return;
@@ -261,13 +264,22 @@ export async function startAutoSync(): Promise<void> {
       const liveContent = event.getClearContent?.() || event.getContent();
       if (liveContent?.["m.relates_to"]?.rel_type === "m.replace") {
         handleEditEvent(event, ownUserId, dmRoomIds, client, queue);
+        increment("editsProcessed");
         return;
       }
 
       const msg = extractQueuedMessage(event, ownUserId, dmRoomIds, client);
-      if (!msg) return;
+      if (!msg) {
+        increment("messagesFiltered");
+        return;
+      }
 
       const enqueued = queue.enqueueMessage(msg);
+      if (enqueued) {
+        increment("messagesEnqueued");
+      } else {
+        increment("messagesDeduplicated");
+      }
 
       // For encrypted messages, listen for decryption to update body
       if (enqueued && msg.decryptionFailed) {
@@ -283,6 +295,7 @@ export async function startAutoSync(): Promise<void> {
         });
       }
     } catch (err: any) {
+      increment("listenerErrors");
       const eid = event.getId?.() || "unknown";
       const etype = event.getType?.() || "unknown";
       console.error(`[autoSync] Live listener error processing event ${eid} (${etype}): ${err.message}`);
