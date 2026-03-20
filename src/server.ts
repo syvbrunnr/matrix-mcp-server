@@ -11,6 +11,7 @@ import { registerWaitForMessagesTools } from "./tools/tier0/wait-for-messages.js
 import { registerGetQueuedMessagesTools } from "./tools/tier0/get-queued-messages.js";
 import { registerInviteTools } from "./tools/tier0/invites.js";
 import { registerReplayQueueTools } from "./tools/tier0/replay-queue.js";
+import { registerEventContextTools } from "./tools/tier0/event-context.js";
 
 // Tier 1 (Action tools)
 import { registerMessagingTools } from "./tools/tier1/messaging.js";
@@ -47,6 +48,7 @@ registerWaitForMessagesTools(server); // wait-for-messages
 registerGetQueuedMessagesTools(server); // get-queued-messages
 registerInviteTools(server);          // get-pending-invites
 registerReplayQueueTools(server);     // replay-queue
+registerEventContextTools(server);   // get-event-context
 
 // Tier 1: Action Matrix tools
 registerMessagingTools(server);       // send-message, send-direct-message
