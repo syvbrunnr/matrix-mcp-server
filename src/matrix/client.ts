@@ -9,6 +9,7 @@ import { exchangeToken, TokenExchangeConfig } from "../auth/tokenExchange.js";
 import { getCachedClient, cacheClient, removeCachedClient } from "./clientCache.js";
 import { installIDBAdapter } from "./idb-sqlite-adapter.js";
 import { runMigrations } from "./migrations.js";
+import { setPhase2Status, incrementRetry } from "./e2eeStatus.js";
 
 // Install SQLite-backed IndexedDB before any crypto init.
 // Uses MATRIX_DATA_DIR env var, defaults to .data/ in cwd.
@@ -240,7 +241,9 @@ export async function createMatrixClient(
     if (matrixPassword) {
       // Phase 2 runs in the background — don't block client creation.
       // E2EE will become available once bootstrap completes.
-      (async () => {
+      // Status is tracked via e2eeStatus module so tools can query it.
+      const runPhase2 = async () => {
+      setPhase2Status(userId, homeserverUrl, "in_progress");
       try {
         const crypto = client.getCrypto();
         if (crypto) {
@@ -362,6 +365,7 @@ export async function createMatrixClient(
           await crypto.checkKeyBackupAndEnable();
           const finalCrossSigningStatus = await crypto.getCrossSigningStatus();
           console.error("[E2EE] Phase 2 complete: cross-signing status: %j", finalCrossSigningStatus);
+          setPhase2Status(userId, homeserverUrl, "complete");
           // Write diagnostic file so we can check status without seeing stderr
           const diagPath = path.join(DATA_DIR, "e2ee-diagnostic.json");
           const myDiagDeviceId = client.getDeviceId();
@@ -380,9 +384,13 @@ export async function createMatrixClient(
             crossSigningStatus: finalCrossSigningStatus,
             deviceVerificationStatus: diagDevStatus,
           }, null, 2));
-        } // if (crypto)
+        } else {
+          // No crypto module available — mark as failed
+          setPhase2Status(userId, homeserverUrl, "failed", "Crypto module not available");
+        }
       } catch (e: any) {
-        console.warn("[E2EE] Phase 2 bootstrap failed (non-fatal):", e.message);
+        console.error("[E2EE] Phase 2 bootstrap failed:", e.message);
+        setPhase2Status(userId, homeserverUrl, "failed", e.message);
         const diagPath = path.join(DATA_DIR, "e2ee-diagnostic.json");
         writeFileSync(diagPath, JSON.stringify({
           timestamp: new Date().toISOString(),
@@ -390,7 +398,21 @@ export async function createMatrixClient(
           stack: e.stack?.split("\n").slice(0, 5),
         }, null, 2));
       }
-      })();
+      };
+
+      // Run Phase 2 with retry: if it fails, retry once after 5 seconds.
+      // More room state may be available after initial sync completes.
+      const MAX_RETRIES = 1;
+      runPhase2().catch(async () => {
+        const retryNum = incrementRetry(userId, homeserverUrl);
+        if (retryNum <= MAX_RETRIES) {
+          console.error(`[E2EE] Retrying Phase 2 bootstrap (attempt ${retryNum + 1}) in 5s...`);
+          await new Promise(r => setTimeout(r, 5000));
+          runPhase2().catch(() => {
+            console.error("[E2EE] Phase 2 retry failed. E2EE may be degraded for this user.");
+          });
+        }
+      });
     }
 
     // Resume from a persisted sync token so /sync starts from exactly where we left off.

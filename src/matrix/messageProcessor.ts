@@ -1,6 +1,7 @@
 import * as sdk from "matrix-js-sdk";
 import { MatrixClient, EventType } from "matrix-js-sdk";
 import fetch from "node-fetch";
+import { getPhase2Status } from "./e2eeStatus.js";
 
 /**
  * Represents a processed message that can be returned to MCP clients.
@@ -60,6 +61,16 @@ export async function processMessage(
         metadata.decryptionFailed = true;
         const reason = (event as any).decryptionFailureReason;
         if (reason) metadata.decryptionFailureReason = reason;
+        // Surface E2EE Phase 2 status so agent knows if this is a systemic issue
+        const userId = matrixClient.getUserId();
+        const homeserverUrl = matrixClient.getHomeserverUrl();
+        if (userId && homeserverUrl) {
+          const phase2 = getPhase2Status(userId, homeserverUrl);
+          if (phase2 && phase2.state !== "complete") {
+            metadata.e2eeBootstrapState = phase2.state;
+            if (phase2.error) metadata.e2eeBootstrapError = phase2.error;
+          }
+        }
       }
       if (replyToEventId) metadata.replyToEventId = replyToEventId;
       if (threadRootEventId) metadata.threadRootEventId = threadRootEventId;
