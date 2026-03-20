@@ -60,6 +60,7 @@ class MessageQueue extends EventEmitter {
     insertInvite: Database.Statement;
     peekCounts: Database.Statement;
     peekRooms: Database.Statement;
+    peekCountsByRoom: Database.Statement;
     selectUnfetched: Database.Statement;
     selectUnfetchedByRoom: Database.Statement;
     getSyncToken: Database.Statement;
@@ -143,6 +144,10 @@ class MessageQueue extends EventEmitter {
       peekRooms: this.db.prepare(`
         SELECT room_id, room_name, COUNT(*) as cnt FROM queued_items
         WHERE fetched = 0 AND event_type = 'message' GROUP BY room_id, room_name
+      `),
+      peekCountsByRoom: this.db.prepare(`
+        SELECT event_type, COUNT(*) as cnt FROM queued_items
+        WHERE fetched = 0 AND room_id = ? GROUP BY event_type
       `),
       selectUnfetched: this.db.prepare(`
         SELECT * FROM queued_items WHERE fetched = 0 ORDER BY timestamp ASC
@@ -246,6 +251,25 @@ class MessageQueue extends EventEmitter {
       count: total,
       types,
       rooms: rooms.map(r => ({ roomId: r.room_id, roomName: r.room_name, count: r.cnt })),
+    };
+  }
+
+  peekRoom(roomId: string): QueuePeek {
+    const counts = this.stmts.peekCountsByRoom.all(roomId) as { event_type: string; cnt: number }[];
+
+    const types = { messages: 0, reactions: 0, invites: 0 };
+    let total = 0;
+    for (const row of counts) {
+      if (row.event_type === "message") types.messages = row.cnt;
+      else if (row.event_type === "reaction") types.reactions = row.cnt;
+      else if (row.event_type === "invite") types.invites = row.cnt;
+      total += row.cnt;
+    }
+
+    return {
+      count: total,
+      types,
+      rooms: total > 0 ? [{ roomId, roomName: "", count: total }] : [],
     };
   }
 

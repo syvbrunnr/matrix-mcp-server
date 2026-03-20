@@ -3,6 +3,7 @@ import { ToolRegistrationFunction } from "../../types/tool-types.js";
 import { getMessageQueue } from "../../matrix/messageQueue.js";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
+const MAX_TIMEOUT_MS = 300_000; // 5 minutes — hard cap prevents zombie listeners
 
 export const registerWaitForMessagesTools: ToolRegistrationFunction = (server) => {
   server.registerTool(
@@ -22,7 +23,7 @@ export const registerWaitForMessagesTools: ToolRegistrationFunction = (server) =
         timeoutMs: z.coerce
           .number()
           .default(DEFAULT_TIMEOUT_MS)
-          .describe("How long to wait in milliseconds (default 30 seconds, no upper limit)"),
+          .describe(`How long to wait in milliseconds (default ${DEFAULT_TIMEOUT_MS / 1000}s, max ${MAX_TIMEOUT_MS / 1000}s)`),
         since: z
           .string()
           .optional()
@@ -30,69 +31,80 @@ export const registerWaitForMessagesTools: ToolRegistrationFunction = (server) =
       },
       annotations: { readOnlyHint: true, idempotentHint: false, openWorldHint: true },
     },
-    async ({ timeoutMs }: { roomId?: string; timeoutMs: number; since?: string }) => {
+    async (
+      { roomId, timeoutMs }: { roomId?: string; timeoutMs: number; since?: string },
+      extra: { signal?: AbortSignal }
+    ) => {
       const queue = getMessageQueue();
-      const timeout = Math.min(Math.max(timeoutMs, 1000), 2147483647);
+      const timeout = Math.min(Math.max(timeoutMs, 1000), MAX_TIMEOUT_MS);
+      const signal = extra?.signal;
 
-      // Check if there are already queued items
-      let peek = queue.peek();
-
-      if (peek.count > 0) {
-        return {
-          content: [{
-            type: "text" as const,
-            text: JSON.stringify({
-              status: "messages_available",
-              count: peek.count,
-              types: peek.types,
-              rooms: peek.rooms,
-            }),
-          }],
-        };
+      // If already aborted, return immediately
+      if (signal?.aborted) {
+        return formatResponse("aborted", roomId ? queue.peekRoom(roomId) : queue.peek());
       }
 
-      // No items — wait for new-item event or timeout
-      const result = await new Promise<"new_items" | "timeout">((resolve) => {
-        const onNewItem = () => {
+      // Check if there are already queued items (room-filtered if specified)
+      let peek = roomId ? queue.peekRoom(roomId) : queue.peek();
+
+      if (peek.count > 0) {
+        return formatResponse("messages_available", peek);
+      }
+
+      // No items — wait for new-item event, timeout, or abort
+      const result = await new Promise<"new_items" | "timeout" | "aborted">((resolve) => {
+        let resolved = false;
+        const done = (value: "new_items" | "timeout" | "aborted") => {
+          if (resolved) return;
+          resolved = true;
           clearTimeout(timer);
-          resolve("new_items");
+          queue.removeListener("new-item", onNewItem);
+          signal?.removeEventListener("abort", onAbort);
+          resolve(value);
         };
 
-        const timer = setTimeout(() => {
-          queue.removeListener("new-item", onNewItem);
-          resolve("timeout");
-        }, timeout);
+        const onNewItem = (evt: { roomId?: string }) => {
+          // If watching a specific room, ignore events for other rooms
+          if (roomId && evt.roomId !== roomId) return;
+          done("new_items");
+        };
 
-        queue.once("new-item", onNewItem);
+        const onAbort = () => done("aborted");
+
+        const timer = setTimeout(() => done("timeout"), timeout);
+
+        queue.on("new-item", onNewItem);
+        signal?.addEventListener("abort", onAbort, { once: true });
       });
 
       if (result === "timeout") {
-        return {
-          content: [{
-            type: "text" as const,
-            text: JSON.stringify({
-              status: "timeout",
-              count: 0,
-              types: { messages: 0, reactions: 0, invites: 0 },
-              rooms: [],
-            }),
-          }],
-        };
+        return formatResponse("timeout", { count: 0, types: { messages: 0, reactions: 0, invites: 0 }, rooms: [] });
+      }
+
+      if (result === "aborted") {
+        return formatResponse("aborted", roomId ? queue.peekRoom(roomId) : queue.peek());
       }
 
       // New items arrived — peek again for counts
-      peek = queue.peek();
-      return {
-        content: [{
-          type: "text" as const,
-          text: JSON.stringify({
-            status: "messages_available",
-            count: peek.count,
-            types: peek.types,
-            rooms: peek.rooms,
-          }),
-        }],
-      };
+      peek = roomId ? queue.peekRoom(roomId) : queue.peek();
+      return formatResponse("messages_available", peek);
     }
   );
 };
+
+function formatResponse(
+  status: string,
+  peek: { count: number; types: { messages: number; reactions: number; invites: number }; rooms: any[] }
+) {
+  return {
+    content: [{
+      type: "text" as const,
+      text: JSON.stringify({
+        status,
+        count: peek.count,
+        types: peek.types,
+        rooms: peek.rooms,
+      }),
+    }],
+  };
+}
