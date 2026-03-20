@@ -3,6 +3,45 @@ import { removeClientFromCache } from "../../matrix/client.js";
 import { shouldEvictClientCache, getDiagnosticHint } from "../../utils/matrix-errors.js";
 import { ToolRegistrationFunction } from "../../types/tool-types.js";
 
+export const getPendingInvitesHandler = async (
+  _input: any,
+  { requestInfo, authInfo }: any
+) => {
+  const { matrixUserId, homeserverUrl } = getMatrixContext(requestInfo?.headers);
+  const accessToken = getAccessToken(requestInfo?.headers, authInfo?.token);
+
+  try {
+    const client = await createConfiguredMatrixClient(homeserverUrl, matrixUserId, accessToken);
+    const invites = client.getRooms().filter((r) => r.getMyMembership() === "invite");
+
+    if (invites.length === 0) {
+      return { content: [{ type: "text" as const, text: "No pending invites." }] };
+    }
+
+    return {
+      content: invites.map((room: any) => {
+        const member = room.currentState.getMember(matrixUserId);
+        const invitedBy = member?.events?.member?.getSender() ?? "unknown";
+        return {
+          type: "text" as const,
+          text: JSON.stringify({
+            roomId: room.roomId,
+            roomName: room.name || room.roomId,
+            invitedBy,
+          }),
+        };
+      }),
+    };
+  } catch (error: any) {
+    console.error(`Failed to get pending invites: ${error.message}`);
+    if (shouldEvictClientCache(error)) removeClientFromCache(matrixUserId, homeserverUrl);
+    return {
+      content: [{ type: "text" as const, text: `Error: Failed to get pending invites - ${error.message}\n${getDiagnosticHint(error)}` }],
+      isError: true,
+    };
+  }
+};
+
 export const registerInviteTools: ToolRegistrationFunction = (server) => {
   server.registerTool(
     "get-pending-invites",
@@ -15,40 +54,6 @@ export const registerInviteTools: ToolRegistrationFunction = (server) => {
       inputSchema: {},
       annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
     },
-    async (_input: any, { requestInfo, authInfo }: any) => {
-      const { matrixUserId, homeserverUrl } = getMatrixContext(requestInfo?.headers);
-      const accessToken = getAccessToken(requestInfo?.headers, authInfo?.token);
-
-      try {
-        const client = await createConfiguredMatrixClient(homeserverUrl, matrixUserId, accessToken);
-        const invites = client.getRooms().filter((r) => r.getMyMembership() === "invite");
-
-        if (invites.length === 0) {
-          return { content: [{ type: "text" as const, text: "No pending invites." }] };
-        }
-
-        return {
-          content: invites.map((room: any) => {
-            const member = room.currentState.getMember(matrixUserId);
-            const invitedBy = member?.events?.member?.getSender() ?? "unknown";
-            return {
-              type: "text" as const,
-              text: JSON.stringify({
-                roomId: room.roomId,
-                roomName: room.name || room.roomId,
-                invitedBy,
-              }),
-            };
-          }),
-        };
-      } catch (error: any) {
-        console.error(`Failed to get pending invites: ${error.message}`);
-        if (shouldEvictClientCache(error)) removeClientFromCache(matrixUserId, homeserverUrl);
-        return {
-          content: [{ type: "text" as const, text: `Error: Failed to get pending invites - ${error.message}\n${getDiagnosticHint(error)}` }],
-          isError: true,
-        };
-      }
-    }
+    getPendingInvitesHandler
   );
 };

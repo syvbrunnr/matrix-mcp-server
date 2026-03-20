@@ -6,6 +6,50 @@ import {
 } from "../../matrix/notificationSubscriptions.js";
 import { getMessageQueue } from "../../matrix/messageQueue.js";
 
+export const subscribeNotificationsHandler = async (
+  { rooms, users, dms, all, mentionsOnly }: { rooms?: string[]; users?: string[]; dms?: boolean; all?: boolean; mentionsOnly?: boolean },
+  _extra?: any,
+  serverRef?: { sendResourceListChanged: () => void }
+) => {
+  setSubscription({ rooms, users, dms, all, mentionsOnly });
+  const sub = getSubscription();
+  const parts: string[] = [];
+  if (sub?.all) parts.push("all events");
+  if (sub?.dms) parts.push("all DMs");
+  if (sub?.mentionsOnly) parts.push("@mentions in all rooms");
+  if (sub?.rooms?.length) parts.push(`rooms: ${sub.rooms.join(", ")}`);
+  if (sub?.users?.length) parts.push(`users: ${sub.users.join(", ")}`);
+
+  // Notify immediately if there are already queued messages
+  const pending = getMessageQueue().peek();
+  if (pending.count > 0 && parts.length > 0) {
+    try { serverRef?.sendResourceListChanged(); } catch { /* transport may not be ready */ }
+  }
+
+  return {
+    content: [
+      {
+        type: "text" as const,
+        text: parts.length
+          ? `Subscribed to notifications for: ${parts.join("; ")}`
+          : "Subscription set but no filters specified — no notifications will fire. Use all, dms, rooms, or users.",
+      },
+    ],
+  };
+};
+
+export const unsubscribeNotificationsHandler = async () => {
+  setSubscription(null);
+  return {
+    content: [
+      {
+        type: "text" as const,
+        text: "Unsubscribed from all notifications.",
+      },
+    ],
+  };
+};
+
 export const registerNotificationSubscribeTools: ToolRegistrationFunction = (
   server
 ) => {
@@ -47,32 +91,8 @@ export const registerNotificationSubscribeTools: ToolRegistrationFunction = (
         openWorldHint: false,
       },
     },
-    async ({ rooms, users, dms, all, mentionsOnly }: { rooms?: string[]; users?: string[]; dms?: boolean; all?: boolean; mentionsOnly?: boolean }) => {
-      setSubscription({ rooms, users, dms, all, mentionsOnly });
-      const sub = getSubscription();
-      const parts: string[] = [];
-      if (sub?.all) parts.push("all events");
-      if (sub?.dms) parts.push("all DMs");
-      if (sub?.mentionsOnly) parts.push("@mentions in all rooms");
-      if (sub?.rooms?.length) parts.push(`rooms: ${sub.rooms.join(", ")}`);
-      if (sub?.users?.length) parts.push(`users: ${sub.users.join(", ")}`);
-
-      // Notify immediately if there are already queued messages
-      const pending = getMessageQueue().peek();
-      if (pending.count > 0 && parts.length > 0) {
-        try { server.sendResourceListChanged(); } catch { /* transport may not be ready */ }
-      }
-
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: parts.length
-              ? `Subscribed to notifications for: ${parts.join("; ")}`
-              : "Subscription set but no filters specified — no notifications will fire. Use all, dms, rooms, or users.",
-          },
-        ],
-      };
+    async (input: any) => {
+      return subscribeNotificationsHandler(input, undefined, server);
     }
   );
 
@@ -90,16 +110,6 @@ export const registerNotificationSubscribeTools: ToolRegistrationFunction = (
         openWorldHint: false,
       },
     },
-    async () => {
-      setSubscription(null);
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: "Unsubscribed from all notifications.",
-          },
-        ],
-      };
-    }
+    unsubscribeNotificationsHandler
   );
 };
