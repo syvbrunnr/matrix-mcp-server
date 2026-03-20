@@ -212,6 +212,7 @@ export const registerMessageTools: ToolRegistrationFunction = (server) => {
       title: "Get Matrix Messages by Date Range",
       description:
         "Retrieve messages from a Matrix room within a specific date range. " +
+        "Only searches synced timeline history, not the full room history — for full-history search use search-messages instead. " +
         "Each text message is a JSON object with: eventId, sender, timestamp, body, " +
         "and optionally replyToEventId and threadRootEventId.",
       inputSchema: {
@@ -233,7 +234,7 @@ export const registerMessageTools: ToolRegistrationFunction = (server) => {
     "identify-active-users",
     {
       title: "Identify Most Active Users",
-      description: "Find the most active users in a Matrix room based on message count in recent history",
+      description: "Find the most active users in a Matrix room based on message count in synced timeline history (recent messages only, not full room history)",
       inputSchema: {
         roomId: z.string().describe("Matrix room ID (e.g., !roomid:domain.com)"),
         limit: z.coerce

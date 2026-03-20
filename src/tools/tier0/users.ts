@@ -256,7 +256,7 @@ export const registerUserTools: ToolRegistrationFunction = (server) => {
     "get-user-profile",
     {
       title: "Get Matrix User Profile",
-      description: "Get profile information for a specific Matrix user including display name, avatar, and presence",
+      description: "Get profile information for a specific Matrix user including display name, avatar, presence, last active time, and up to 5 shared rooms",
       inputSchema: {
         targetUserId: z
           .string()
@@ -298,7 +298,8 @@ export const registerUserTools: ToolRegistrationFunction = (server) => {
     "get-all-users",
     {
       title: "Get All Known Users",
-      description: "List all users known to the Matrix client, including their display names and user IDs",
+      description: "List all users known to the Matrix client from rooms you've joined (not all homeserver users). " +
+        "Returns display names and user IDs. For a specific user's profile, use get-user-profile instead.",
       inputSchema: {},
       annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
     },

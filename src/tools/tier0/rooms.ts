@@ -160,7 +160,8 @@ export const registerRoomTools: ToolRegistrationFunction = (server) => {
     "list-joined-rooms",
     {
       title: "List Joined Matrix Rooms",
-      description: "Get a list of all Matrix rooms the user has joined, including room names, IDs, and basic information",
+      description: "Get a list of all Matrix rooms the user has joined, with room names, IDs, and member counts. " +
+        "Use this first to discover room IDs needed by other tools like get-room-messages, send-message, and get-room-info.",
       inputSchema: {},
       annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
     },
@@ -172,7 +173,7 @@ export const registerRoomTools: ToolRegistrationFunction = (server) => {
     "get-room-info",
     {
       title: "Get Matrix Room Information",
-      description: "Get detailed information about a Matrix room including name, topic, settings, and member count",
+      description: "Get detailed information about a Matrix room including name, topic, member count, encryption status, creator, and creation date",
       inputSchema: {
         roomId: z.string().describe("Matrix room ID (e.g., !roomid:domain.com)"),
       },
@@ -186,7 +187,8 @@ export const registerRoomTools: ToolRegistrationFunction = (server) => {
     "get-room-members",
     {
       title: "Get Matrix Room Members",
-      description: "List all members currently joined to a Matrix room with their display names and user IDs",
+      description: "List all members currently joined to a Matrix room with their display names and user IDs. " +
+        "Use this to get user IDs needed for send-direct-message, invite-user, or get-user-profile.",
       inputSchema: {
         roomId: z.string().describe("Matrix room ID (e.g., !roomid:domain.com)"),
       },
