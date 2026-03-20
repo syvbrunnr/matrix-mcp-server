@@ -15,7 +15,7 @@
     "dev": "NODE_OPTIONS=--no-warnings tsx watch src/http-server.ts",
     "dev:stdio": "NODE_OPTIONS=--no-warnings tsx src/stdio-server.ts",
     "lint": "eslint .",
-    "test": "jest"
+    "test": "NODE_OPTIONS='--experimental-vm-modules' jest"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.16.0",

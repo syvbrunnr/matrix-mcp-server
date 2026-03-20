@@ -241,6 +241,136 @@ export const setPowerLevelHandler = async (
   }
 };
 
+// Valid join rule values per Matrix spec
+const VALID_JOIN_RULES = ["public", "invite", "knock", "restricted"] as const;
+type JoinRule = typeof VALID_JOIN_RULES[number];
+
+// Tool: Set room join rules
+export const setJoinRulesHandler = async (
+  { roomId, joinRule }: { roomId: string; joinRule: JoinRule },
+  { requestInfo, authInfo }: any
+) => {
+  const { matrixUserId, homeserverUrl } = getMatrixContext(requestInfo?.headers);
+  const accessToken = getAccessToken(requestInfo?.headers, authInfo?.token);
+
+  try {
+    const client = await createConfiguredMatrixClient(homeserverUrl, matrixUserId, accessToken);
+
+    const room = client.getRoom(roomId);
+    if (!room) {
+      return {
+        content: [{ type: "text" as const, text: `Error: Room ${roomId} not found. You may not be a member of this room.` }],
+        isError: true,
+      };
+    }
+
+    const roomName = room.name || "Unnamed Room";
+    const currentRule = room.currentState.getStateEvents("m.room.join_rules", "")?.getContent()?.join_rule || "unknown";
+
+    // Check permission
+    const powerLevelEvent = room.currentState.getStateEvents("m.room.power_levels", "");
+    const userPowerLevel = room.getMember(matrixUserId)?.powerLevel || 0;
+    const requiredLevel = powerLevelEvent?.getContent()?.events?.["m.room.join_rules"] ||
+                          powerLevelEvent?.getContent()?.state_default || 50;
+
+    if (userPowerLevel < requiredLevel) {
+      return {
+        content: [{ type: "text" as const, text: `Error: You don't have permission to change join rules. Required power level: ${requiredLevel}, your level: ${userPowerLevel}` }],
+        isError: true,
+      };
+    }
+
+    await client.sendStateEvent(roomId, "m.room.join_rules" as any, { join_rule: joinRule });
+
+    return {
+      content: [{
+        type: "text" as const,
+        text: `Successfully updated join rules for ${roomName}\nRoom ID: ${roomId}\nPrevious: ${currentRule}\nNew: ${joinRule}`,
+      }],
+    };
+  } catch (error: any) {
+    console.error(`Failed to set join rules: ${error.message}`);
+    if (shouldEvictClientCache(error)) removeClientFromCache(matrixUserId, homeserverUrl);
+
+    let errorMessage = `Error: Failed to set join rules - ${error.message}`;
+    if (error.message.includes("forbidden") || error.message.includes("M_FORBIDDEN")) {
+      errorMessage = `Error: You don't have permission to change join rules in this room`;
+    } else if (error.message.includes("not found") || error.message.includes("M_NOT_FOUND")) {
+      errorMessage = `Error: Room ${roomId} not found`;
+    }
+
+    return {
+      content: [{ type: "text" as const, text: errorMessage }],
+      isError: true,
+    };
+  }
+};
+
+// Valid history visibility values per Matrix spec
+const VALID_HISTORY_VISIBILITY = ["invited", "joined", "shared", "world_readable"] as const;
+type HistoryVisibility = typeof VALID_HISTORY_VISIBILITY[number];
+
+// Tool: Set room history visibility
+export const setHistoryVisibilityHandler = async (
+  { roomId, historyVisibility }: { roomId: string; historyVisibility: HistoryVisibility },
+  { requestInfo, authInfo }: any
+) => {
+  const { matrixUserId, homeserverUrl } = getMatrixContext(requestInfo?.headers);
+  const accessToken = getAccessToken(requestInfo?.headers, authInfo?.token);
+
+  try {
+    const client = await createConfiguredMatrixClient(homeserverUrl, matrixUserId, accessToken);
+
+    const room = client.getRoom(roomId);
+    if (!room) {
+      return {
+        content: [{ type: "text" as const, text: `Error: Room ${roomId} not found. You may not be a member of this room.` }],
+        isError: true,
+      };
+    }
+
+    const roomName = room.name || "Unnamed Room";
+    const currentVisibility = room.currentState.getStateEvents("m.room.history_visibility", "")?.getContent()?.history_visibility || "unknown";
+
+    // Check permission
+    const powerLevelEvent = room.currentState.getStateEvents("m.room.power_levels", "");
+    const userPowerLevel = room.getMember(matrixUserId)?.powerLevel || 0;
+    const requiredLevel = powerLevelEvent?.getContent()?.events?.["m.room.history_visibility"] ||
+                          powerLevelEvent?.getContent()?.state_default || 50;
+
+    if (userPowerLevel < requiredLevel) {
+      return {
+        content: [{ type: "text" as const, text: `Error: You don't have permission to change history visibility. Required power level: ${requiredLevel}, your level: ${userPowerLevel}` }],
+        isError: true,
+      };
+    }
+
+    await client.sendStateEvent(roomId, "m.room.history_visibility" as any, { history_visibility: historyVisibility });
+
+    return {
+      content: [{
+        type: "text" as const,
+        text: `Successfully updated history visibility for ${roomName}\nRoom ID: ${roomId}\nPrevious: ${currentVisibility}\nNew: ${historyVisibility}`,
+      }],
+    };
+  } catch (error: any) {
+    console.error(`Failed to set history visibility: ${error.message}`);
+    if (shouldEvictClientCache(error)) removeClientFromCache(matrixUserId, homeserverUrl);
+
+    let errorMessage = `Error: Failed to set history visibility - ${error.message}`;
+    if (error.message.includes("forbidden") || error.message.includes("M_FORBIDDEN")) {
+      errorMessage = `Error: You don't have permission to change history visibility in this room`;
+    } else if (error.message.includes("not found") || error.message.includes("M_NOT_FOUND")) {
+      errorMessage = `Error: Room ${roomId} not found`;
+    }
+
+    return {
+      content: [{ type: "text" as const, text: errorMessage }],
+      isError: true,
+    };
+  }
+};
+
 // Registration function
 export const registerRoomAdminTools: ToolRegistrationFunction = (server) => {
   // Tool: Set room name
@@ -290,5 +420,43 @@ export const registerRoomAdminTools: ToolRegistrationFunction = (server) => {
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
     setPowerLevelHandler
+  );
+
+  // Tool: Set room join rules
+  server.registerTool(
+    "set-room-join-rules",
+    {
+      title: "Set Room Join Rules",
+      description:
+        "Set who can join a Matrix room. " +
+        "Options: 'public' (anyone can join), 'invite' (invitation only), " +
+        "'knock' (users can request to join), 'restricted' (limited by space membership). " +
+        "Requires appropriate permissions.",
+      inputSchema: {
+        roomId: z.string().describe("Matrix room ID (e.g., !roomid:domain.com)"),
+        joinRule: z.enum(["public", "invite", "knock", "restricted"]).describe("Join rule: public, invite, knock, or restricted"),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    },
+    setJoinRulesHandler
+  );
+
+  // Tool: Set room history visibility
+  server.registerTool(
+    "set-room-history-visibility",
+    {
+      title: "Set Room History Visibility",
+      description:
+        "Control how much room history is visible to new members. " +
+        "Options: 'shared' (all history visible to members), 'invited' (history from invite onward), " +
+        "'joined' (history from join onward), 'world_readable' (anyone can read history). " +
+        "Requires appropriate permissions.",
+      inputSchema: {
+        roomId: z.string().describe("Matrix room ID (e.g., !roomid:domain.com)"),
+        historyVisibility: z.enum(["invited", "joined", "shared", "world_readable"]).describe("History visibility: invited, joined, shared, or world_readable"),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    },
+    setHistoryVisibilityHandler
   );
 };
