@@ -5,6 +5,7 @@ import { removeClientFromCache } from "../../matrix/client.js";
 import { shouldEvictClientCache } from "../../utils/matrix-errors.js";
 import { processMessage, processMessagesByDate, countMessagesByUser } from "../../matrix/messageProcessor.js";
 import { ToolRegistrationFunction } from "../../types/tool-types.js";
+import { sendReadReceipt } from "../../utils/read-receipt.js";
 
 // Tool: Get room messages
 export const getRoomMessagesHandler = async (
@@ -39,6 +40,8 @@ export const getRoomMessagesHandler = async (
     );
 
     const validMessages = messages.filter((message) => message !== null);
+
+    sendReadReceipt(client, room);
 
     return {
       content:
@@ -91,6 +94,8 @@ export const getMessagesByDateHandler = async (
 
     const events = room.getLiveTimeline().getEvents();
     const messages = await processMessagesByDate(events, startDate, endDate, client);
+
+    sendReadReceipt(client, room);
 
     return {
       content:
