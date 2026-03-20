@@ -51,7 +51,7 @@ export interface QueueContents {
   invites: QueuedInvite[];
 }
 
-class MessageQueue extends EventEmitter {
+export class MessageQueue extends EventEmitter {
   private db: Database.Database;
 
   private stmts!: {
@@ -70,9 +70,9 @@ class MessageQueue extends EventEmitter {
     checkFetched: Database.Statement;
   };
 
-  constructor() {
+  constructor(dbPath?: string) {
     super();
-    this.db = new Database(DB_PATH);
+    this.db = new Database(dbPath ?? DB_PATH);
     this.db.pragma("journal_mode = WAL");
     this.db.pragma("busy_timeout = 5000");
     this.initSchema();
