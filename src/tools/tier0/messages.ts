@@ -97,12 +97,17 @@ export const getRoomMessagesHandler = async (
 
 // Tool: Get messages by date
 export const getMessagesByDateHandler = async (
-  { roomId, startDate, endDate }: { roomId: string; startDate: string; endDate: string },
+  { roomId, startDate, endDate, limit, paginationToken }: {
+    roomId: string; startDate: string; endDate: string; limit: number; paginationToken?: string;
+  },
   { requestInfo, authInfo }: any
 ) => {
   const { matrixUserId, homeserverUrl } = getMatrixContext(requestInfo?.headers);
   const accessToken = getAccessToken(requestInfo?.headers, authInfo?.token);
-  
+
+  const startMs = new Date(startDate).getTime();
+  const endMs = new Date(endDate).getTime();
+
   try {
     const client = await createConfiguredMatrixClient(homeserverUrl, matrixUserId, accessToken);
     const room = client.getRoom(roomId);
@@ -118,24 +123,57 @@ export const getMessagesByDateHandler = async (
       };
     }
 
+    // Paginated mode: fetch from server-side /messages API with date filtering
+    if (paginationToken) {
+      // Fetch more than limit to account for date filtering
+      const fetchSize = Math.min(limit * 3, 100);
+      const response = await client.createMessagesRequest(
+        roomId, paginationToken, fetchSize, Direction.Backward,
+      );
+
+      const rawEvents = (response.chunk || []).map((raw: any) => new MatrixEvent(raw));
+      const inRange = rawEvents.filter((e: MatrixEvent) => {
+        const ts = e.getTs();
+        return ts >= startMs && ts <= endMs;
+      });
+
+      const messages = await Promise.all(
+        inRange.slice(0, limit).map((event: MatrixEvent) => processMessage(event, client))
+      );
+      const validMessages = messages.filter((m) => m !== null);
+
+      const result: any[] = validMessages.length > 0
+        ? validMessages
+        : [{ type: "text" as const, text: `No messages found in room ${room.name || roomId} between ${startDate} and ${endDate}` }];
+
+      // Include nextPageToken only if we haven't passed the start date boundary
+      const oldestFetched = rawEvents.length > 0
+        ? Math.min(...rawEvents.map((e: MatrixEvent) => e.getTs()))
+        : 0;
+      if (response.end && oldestFetched >= startMs) {
+        result.push({ type: "text" as const, text: `__nextPageToken:${response.end}` });
+      }
+
+      return { content: result };
+    }
+
+    // Default mode: synced timeline filtered by date
     const events = room.getLiveTimeline().getEvents();
     const messages = await processMessagesByDate(events, startDate, endDate, client);
 
     sendReadReceipt(client, room);
 
-    return {
-      content:
-        messages.length > 0
-          ? messages
-          : [
-              {
-                type: "text",
-                text: `No messages found in room ${
-                  room.name || roomId
-                } between ${startDate} and ${endDate}`,
-              },
-            ],
-    };
+    const result: any[] = messages.length > 0
+      ? messages
+      : [{ type: "text" as const, text: `No messages found in room ${room.name || roomId} between ${startDate} and ${endDate}` }];
+
+    // Include pagination token for fetching older date-filtered messages
+    const backwardToken = room.getLiveTimeline().getPaginationToken(Direction.Backward);
+    if (backwardToken) {
+      result.push({ type: "text" as const, text: `__nextPageToken:${backwardToken}` });
+    }
+
+    return { content: result };
   } catch (error: any) {
     console.error(`Failed to filter messages by date: ${error.message}`);
     if (shouldEvictClientCache(error)) removeClientFromCache(matrixUserId, homeserverUrl);
@@ -247,7 +285,9 @@ export const registerMessageTools: ToolRegistrationFunction = (server) => {
       title: "Get Matrix Messages by Date Range",
       description:
         "Retrieve messages from a Matrix room within a specific date range. " +
-        "Only searches synced timeline history, not the full room history — for full-history search use search-messages instead. " +
+        "Without paginationToken, searches synced timeline. With paginationToken, " +
+        "fetches from the server-side /messages API (full room history) with date filtering. " +
+        "Response includes __nextPageToken when more messages may exist in the date range. " +
         "Each text message is a JSON object with: eventId, sender, timestamp, body, " +
         "and optionally replyToEventId and threadRootEventId.",
       inputSchema: {
@@ -258,6 +298,17 @@ export const registerMessageTools: ToolRegistrationFunction = (server) => {
         endDate: z
           .string()
           .describe("End date in ISO 8601 format (e.g., 2024-01-02T00:00:00Z)"),
+        limit: z.coerce
+          .number()
+          .default(50)
+          .describe("Maximum number of messages to return per page (default: 50)"),
+        paginationToken: z
+          .string()
+          .optional()
+          .describe(
+            "Token for fetching older date-filtered messages from full room history. " +
+            "Use the __nextPageToken value from a previous response."
+          ),
       },
       annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
     },

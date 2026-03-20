@@ -199,10 +199,11 @@ describe("getMessagesByDateHandler", () => {
     ] as any);
 
     const result = await getMessagesByDateHandler(
-      { roomId: "!room:ex.com", startDate: "2024-01-01T00:00:00Z", endDate: "2024-01-02T00:00:00Z" },
+      { roomId: "!room:ex.com", startDate: "2024-01-01T00:00:00Z", endDate: "2024-01-02T00:00:00Z", limit: 50 },
       reqContext
     );
     expect(result.isError).toBeUndefined();
+    // 1 message + no pagination token (mockRoom returns null for getPaginationToken)
     expect(result.content).toHaveLength(1);
     expect(mockProcessByDate).toHaveBeenCalledWith(
       expect.any(Array),
@@ -219,7 +220,7 @@ describe("getMessagesByDateHandler", () => {
     mockProcessByDate.mockResolvedValue([] as any);
 
     const result = await getMessagesByDateHandler(
-      { roomId: "!room:ex.com", startDate: "2020-01-01T00:00:00Z", endDate: "2020-01-02T00:00:00Z" },
+      { roomId: "!room:ex.com", startDate: "2020-01-01T00:00:00Z", endDate: "2020-01-02T00:00:00Z", limit: 50 },
       reqContext
     );
     expect(result.content).toHaveLength(1);
@@ -233,7 +234,7 @@ describe("getMessagesByDateHandler", () => {
     mockCreateClient.mockResolvedValue(client as any);
 
     const result = await getMessagesByDateHandler(
-      { roomId: "!missing:ex.com", startDate: "2024-01-01T00:00:00Z", endDate: "2024-01-02T00:00:00Z" },
+      { roomId: "!missing:ex.com", startDate: "2024-01-01T00:00:00Z", endDate: "2024-01-02T00:00:00Z", limit: 50 },
       reqContext
     );
     expect(result.isError).toBe(true);
@@ -244,11 +245,38 @@ describe("getMessagesByDateHandler", () => {
     mockCreateClient.mockRejectedValue(new Error("timeout"));
 
     const result = await getMessagesByDateHandler(
-      { roomId: "!room:ex.com", startDate: "2024-01-01T00:00:00Z", endDate: "2024-01-02T00:00:00Z" },
+      { roomId: "!room:ex.com", startDate: "2024-01-01T00:00:00Z", endDate: "2024-01-02T00:00:00Z", limit: 50 },
       reqContext
     );
     expect(result.isError).toBe(true);
     expect(result.content[0].text).toContain("get-server-health");
+  });
+
+  it("fetches from server API with date filtering when paginationToken provided", async () => {
+    const room = { name: "Test Room", roomId: "!room:ex.com" };
+    const startDate = "2024-01-01T00:00:00Z";
+    const endDate = "2024-01-02T00:00:00Z";
+    const startMs = new Date(startDate).getTime();
+    const inRangeTs = startMs + 3600_000; // 1h after start
+    const mockCreateMessagesRequest = jest.fn<any>().mockResolvedValue({
+      chunk: [
+        { event_id: "$m1", type: "m.room.message", sender: "@a:ex.com", content: { body: "in range" }, origin_server_ts: inRangeTs },
+        { event_id: "$m2", type: "m.room.message", sender: "@b:ex.com", content: { body: "too old" }, origin_server_ts: startMs - 86400_000 },
+      ],
+      end: "t_next",
+    });
+    const client = { getRoom: () => room, createMessagesRequest: mockCreateMessagesRequest };
+    mockCreateClient.mockResolvedValue(client as any);
+    mockProcessMessage.mockResolvedValue({ type: "text", text: '{"body":"in range"}' } as any);
+
+    const result = await getMessagesByDateHandler(
+      { roomId: "!room:ex.com", startDate, endDate, limit: 50, paginationToken: "t_start" },
+      reqContext
+    );
+    expect(result.isError).toBeUndefined();
+    // Only 1 message in range + no nextPageToken (oldest event is before startDate)
+    expect(mockProcessMessage).toHaveBeenCalledTimes(1);
+    expect(result.content.every((c: any) => !c.text?.startsWith("__nextPageToken:"))).toBe(true);
   });
 });
 
