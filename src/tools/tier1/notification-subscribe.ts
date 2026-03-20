@@ -35,6 +35,10 @@ export const registerNotificationSubscribeTools: ToolRegistrationFunction = (
           .boolean()
           .optional()
           .describe("Subscribe to all notifications"),
+        mentionsOnly: z
+          .boolean()
+          .optional()
+          .describe("Additionally subscribe to @mentions of the bot in any joined room"),
       },
       annotations: {
         readOnlyHint: false,
@@ -43,12 +47,13 @@ export const registerNotificationSubscribeTools: ToolRegistrationFunction = (
         openWorldHint: false,
       },
     },
-    async ({ rooms, users, dms, all }: { rooms?: string[]; users?: string[]; dms?: boolean; all?: boolean }) => {
-      setSubscription({ rooms, users, dms, all });
+    async ({ rooms, users, dms, all, mentionsOnly }: { rooms?: string[]; users?: string[]; dms?: boolean; all?: boolean; mentionsOnly?: boolean }) => {
+      setSubscription({ rooms, users, dms, all, mentionsOnly });
       const sub = getSubscription();
       const parts: string[] = [];
       if (sub?.all) parts.push("all events");
       if (sub?.dms) parts.push("all DMs");
+      if (sub?.mentionsOnly) parts.push("@mentions in all rooms");
       if (sub?.rooms?.length) parts.push(`rooms: ${sub.rooms.join(", ")}`);
       if (sub?.users?.length) parts.push(`users: ${sub.users.join(", ")}`);
 

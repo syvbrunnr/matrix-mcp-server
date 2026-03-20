@@ -72,7 +72,7 @@ if (!process.env.MCP_CHILD) {
     // Accumulates _hint strings across the debounce window for message-type distinction.
     let notifyTimer: ReturnType<typeof setTimeout> | null = null;
     let pendingHints: string[] = [];
-    getMessageQueue().on("new-item", (event: { type?: string; roomId: string; roomName?: string; sender: string; isDM: boolean }) => {
+    getMessageQueue().on("new-item", (event: { type?: string; roomId: string; roomName?: string; sender: string; isDM: boolean; body?: string }) => {
       if (!event || !matchesSubscription(event)) return;
 
       // Build a brief hint string describing the event type.
