@@ -180,6 +180,7 @@ class MessageQueue extends EventEmitter {
       this.emit("new-item", { type: "message", roomId: msg.roomId, roomName: msg.roomName, sender: msg.sender, isDM: msg.isDM });
       return true;
     }
+    console.error(`[MessageQueue] Duplicate skipped: ${msg.eventId} in ${msg.roomName} from ${msg.sender}`);
     return false;
   }
 

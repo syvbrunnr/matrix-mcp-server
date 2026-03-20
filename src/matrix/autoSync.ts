@@ -233,49 +233,59 @@ export async function startAutoSync(): Promise<void> {
 
   // --- Live event listeners ---
   client.on(RoomEvent.Timeline, (event: MatrixEvent) => {
-    const evtType = event.getType();
-    const evtRoomId = event.getRoomId() || "";
+    try {
+      const evtType = event.getType();
+      const evtRoomId = event.getRoomId() || "";
 
-    // Reactions on own messages
-    if (evtType === "m.reaction") {
-      const relatesTo = event.getContent()?.["m.relates_to"];
-      if (relatesTo?.rel_type === "m.annotation" && relatesTo.key && relatesTo.event_id) {
-        const targetEvent = client.getRoom(evtRoomId)?.findEventById(relatesTo.event_id);
-        if (targetEvent?.getSender() === ownUserId) {
-          queue.enqueueReaction({
-            eventId: event.getId() || "",
-            roomId: evtRoomId,
-            roomName: client.getRoom(evtRoomId)?.name || evtRoomId,
-            sender: event.getSender() || "",
-            emoji: relatesTo.key,
-            reactedToEventId: relatesTo.event_id,
-            timestamp: event.getTs(),
-          });
+      // Reactions on own messages
+      if (evtType === "m.reaction") {
+        const relatesTo = event.getContent()?.["m.relates_to"];
+        if (relatesTo?.rel_type === "m.annotation" && relatesTo.key && relatesTo.event_id) {
+          const targetEvent = client.getRoom(evtRoomId)?.findEventById(relatesTo.event_id);
+          if (targetEvent?.getSender() === ownUserId) {
+            queue.enqueueReaction({
+              eventId: event.getId() || "",
+              roomId: evtRoomId,
+              roomName: client.getRoom(evtRoomId)?.name || evtRoomId,
+              sender: event.getSender() || "",
+              emoji: relatesTo.key,
+              reactedToEventId: relatesTo.event_id,
+              timestamp: event.getTs(),
+            });
+          }
         }
+        return;
       }
-      return;
-    }
 
-    // Handle edits (m.replace)
-    const liveContent = event.getClearContent?.() || event.getContent();
-    if (liveContent?.["m.relates_to"]?.rel_type === "m.replace") {
-      handleEditEvent(event, ownUserId, dmRoomIds, client, queue);
-      return;
-    }
+      // Handle edits (m.replace)
+      const liveContent = event.getClearContent?.() || event.getContent();
+      if (liveContent?.["m.relates_to"]?.rel_type === "m.replace") {
+        handleEditEvent(event, ownUserId, dmRoomIds, client, queue);
+        return;
+      }
 
-    const msg = extractQueuedMessage(event, ownUserId, dmRoomIds, client);
-    if (!msg) return;
+      const msg = extractQueuedMessage(event, ownUserId, dmRoomIds, client);
+      if (!msg) return;
 
-    const enqueued = queue.enqueueMessage(msg);
+      const enqueued = queue.enqueueMessage(msg);
 
-    // For encrypted messages, listen for decryption to update body
-    if (enqueued && msg.decryptionFailed) {
-      event.once(MatrixEventEvent.Decrypted, () => {
-        const decryptedContent = event.getClearContent?.() || event.getContent();
-        if (decryptedContent?.body) {
-          queue.updateDecryptedBody(msg.eventId, String(decryptedContent.body));
-        }
-      });
+      // For encrypted messages, listen for decryption to update body
+      if (enqueued && msg.decryptionFailed) {
+        event.once(MatrixEventEvent.Decrypted, () => {
+          try {
+            const decryptedContent = event.getClearContent?.() || event.getContent();
+            if (decryptedContent?.body) {
+              queue.updateDecryptedBody(msg.eventId, String(decryptedContent.body));
+            }
+          } catch (decErr: any) {
+            console.error(`[autoSync] Decryption update failed for ${msg.eventId}: ${decErr.message}`);
+          }
+        });
+      }
+    } catch (err: any) {
+      const eid = event.getId?.() || "unknown";
+      const etype = event.getType?.() || "unknown";
+      console.error(`[autoSync] Live listener error processing event ${eid} (${etype}): ${err.message}`);
     }
   });
 
