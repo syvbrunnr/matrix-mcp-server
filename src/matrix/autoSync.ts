@@ -23,6 +23,7 @@ const SYNC_CHECK_INTERVAL_MS = 3 * 60 * 1000;
 let running = false;
 let keepAliveHandle: ReturnType<typeof setInterval> | null = null;
 let syncCheckHandle: ReturnType<typeof setInterval> | null = null;
+let syncClient: MatrixClient | null = null;
 
 /**
  * Build set of DM room IDs from m.direct account data + fallback heuristic.
@@ -170,6 +171,7 @@ export async function startAutoSync(): Promise<void> {
 
   console.error("[autoSync] Starting...");
   const client = await createConfiguredMatrixClient(homeserverUrl, matrixUserId, accessToken, syncToken);
+  syncClient = client;
   const ownUserId = client.getUserId();
 
   // Persist current sync token
@@ -342,10 +344,15 @@ export async function startAutoSync(): Promise<void> {
 export function stopAutoSync(): void {
   if (keepAliveHandle) { clearInterval(keepAliveHandle); keepAliveHandle = null; }
   if (syncCheckHandle) { clearInterval(syncCheckHandle); syncCheckHandle = null; }
+  syncClient = null;
   running = false;
   console.error("[autoSync] Stopped");
 }
 
 export function isAutoSyncRunning(): boolean {
   return running;
+}
+
+export function getAutoSyncState(): string | null {
+  return syncClient?.getSyncState() ?? null;
 }

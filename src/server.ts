@@ -53,7 +53,7 @@ registerMessagingTools(server);       // send-message, send-direct-message
 registerRoomManagementTools(server);  // create-room, join-room, leave-room, invite-user
 registerRoomAdminTools(server);       // set-room-name, set-room-topic, set-room-join-rules, set-room-history-visibility
 registerMessageActionTools(server);  // redact-event, send-reaction, edit-message
-registerServerAdminTools(server);    // restart-server
+registerServerAdminTools(server);    // restart-server, get-pipeline-metrics, get-server-health
 registerThreadMessageTools(server);  // get-thread-messages
 registerNotificationSubscribeTools(server); // subscribe-notifications, unsubscribe-notifications
 
