@@ -1,6 +1,5 @@
 import { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
-import { EventType } from "matrix-js-sdk";
 import { createConfiguredMatrixClient, getAccessToken, getMatrixContext } from "../../utils/server-helpers.js";
 import { removeClientFromCache } from "../../matrix/client.js";
 import { shouldEvictClientCache } from "../../utils/matrix-errors.js";
@@ -89,7 +88,7 @@ Room ID: ${room.room_id}`,
   }
 };
 
-// Tool: Search message content across rooms
+// Tool: Search message content across rooms (server-side full-history search)
 export const searchMessagesHandler = async (
   { query, roomId, sender, limit }: { query: string; roomId?: string; sender?: string; limit: number },
   { requestInfo, authInfo }: any
@@ -99,86 +98,47 @@ export const searchMessagesHandler = async (
 
   try {
     const client = await createConfiguredMatrixClient(homeserverUrl, matrixUserId, accessToken);
-    const queryLower = query.toLowerCase();
 
-    const rooms = roomId
-      ? [client.getRoom(roomId)].filter(Boolean)
-      : client.getRooms().filter((r) => r.getMyMembership() === "join");
+    const filter: any = {};
+    if (roomId) filter.rooms = [roomId];
+    if (sender) filter.senders = [sender];
 
-    if (rooms.length === 0) {
-      return {
-        content: [{ type: "text" as const, text: roomId ? `Room ${roomId} not found.` : "No joined rooms." }],
-        isError: !!roomId,
-      };
-    }
+    const searchResults = await client.searchRoomEvents({ term: query, filter });
+    const results = searchResults.results || [];
+    const totalCount = searchResults.count ?? results.length;
 
-    interface Match {
-      roomId: string;
-      roomName: string;
-      eventId: string;
-      sender: string;
-      timestamp: number;
-      body: string;
-    }
-
-    const matches: Match[] = [];
-
-    for (const room of rooms) {
-      if (!room) continue;
-      const events = room.getLiveTimeline().getEvents();
-
-      for (const event of events) {
-        const evtType = event.getType();
-        if (evtType !== EventType.RoomMessage && evtType !== EventType.RoomMessageEncrypted) continue;
-
-        const content = event.getClearContent?.() || event.getContent();
-        if (!content?.body) continue;
-        if (content["m.relates_to"]?.rel_type === "m.replace") continue;
-        if (event.isRedacted()) continue;
-
-        const body = String(content.body);
-        if (!body.toLowerCase().includes(queryLower)) continue;
-
-        const evtSender = event.getSender() || "";
-        if (sender && evtSender !== sender) continue;
-
-        matches.push({
-          roomId: room.roomId,
-          roomName: room.name || room.roomId,
-          eventId: event.getId() || "",
-          sender: evtSender,
-          timestamp: event.getTs(),
-          body,
-        });
-      }
-    }
-
-    // Sort newest first, apply limit
-    matches.sort((a, b) => b.timestamp - a.timestamp);
-    const limited = matches.slice(0, limit);
-
-    if (limited.length === 0) {
-      const scope = roomId ? `room ${rooms[0]?.name || roomId}` : "any joined room";
+    if (results.length === 0) {
+      const scope = roomId
+        ? `room ${client.getRoom(roomId)?.name || roomId}`
+        : "any joined room";
       return {
         content: [{ type: "text" as const, text: `No messages matching "${query}" in ${scope}.` }],
       };
     }
 
-    const header = `Found ${matches.length} message${matches.length !== 1 ? "s" : ""} matching "${query}"${matches.length > limit ? ` (showing ${limit})` : ""}:`;
+    const limited = results.slice(0, limit);
+    const header = `Found ${totalCount} message${totalCount !== 1 ? "s" : ""} matching "${query}"${totalCount > limit ? ` (showing ${limit})` : ""}:`;
 
-    const results = limited.map((m) => ({
-      type: "text" as const,
-      text: JSON.stringify({
-        eventId: m.eventId,
-        roomName: m.roomName,
-        roomId: m.roomId,
-        sender: m.sender,
-        timestamp: new Date(m.timestamp).toISOString(),
-        body: m.body,
-      }),
-    }));
+    const formatted = limited.map((sr) => {
+      const event = sr.context.getEvent();
+      const content = event.getClearContent?.() || event.getContent();
+      const evtRoomId = event.getRoomId() || "";
+      const room = client.getRoom(evtRoomId);
 
-    return { content: [{ type: "text" as const, text: header }, ...results] };
+      return {
+        type: "text" as const,
+        text: JSON.stringify({
+          eventId: event.getId() || "",
+          roomName: room?.name || evtRoomId,
+          roomId: evtRoomId,
+          sender: event.getSender() || "",
+          timestamp: new Date(event.getTs()).toISOString(),
+          body: String(content?.body || ""),
+        }),
+      };
+    });
+
+    return { content: [{ type: "text" as const, text: header }, ...formatted] };
   } catch (error: any) {
     console.error(`Failed to search messages: ${error.message}`);
     if (shouldEvictClientCache(error)) removeClientFromCache(matrixUserId, homeserverUrl);
@@ -222,8 +182,8 @@ export const registerSearchTools: ToolRegistrationFunction = (server) => {
     {
       title: "Search Message Content",
       description:
-        "Search message content across joined rooms by keyword. " +
-        "Scans synced message history for case-insensitive text matches. " +
+        "Search message content across joined rooms by keyword using server-side full-text search. " +
+        "Searches the full message history on the homeserver, not just recently synced messages. " +
         "Returns matching messages with room name, sender, timestamp, and body. " +
         "Optionally filter by specific room or sender.",
       inputSchema: {
