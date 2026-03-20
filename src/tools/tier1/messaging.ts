@@ -2,7 +2,7 @@ import { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { createConfiguredMatrixClient, getAccessToken, getMatrixContext } from "../../utils/server-helpers.js";
 import { removeClientFromCache } from "../../matrix/client.js";
-import { shouldEvictClientCache } from "../../utils/matrix-errors.js";
+import { shouldEvictClientCache, getDiagnosticHint } from "../../utils/matrix-errors.js";
 import { resolveThreadRoot, buildRelatesTo } from "../../utils/threading.js";
 import { ToolRegistrationFunction } from "../../types/tool-types.js";
 
@@ -117,7 +117,7 @@ Message type: ${messageType}${extras ? ` (${extras})` : ""}`,
       content: [
         {
           type: "text",
-          text: `Error: Failed to send message - ${error.message}`,
+          text: `Error: Failed to send message - ${error.message}\n${getDiagnosticHint(error)}`,
         },
       ],
       isError: true,
@@ -253,7 +253,8 @@ ${!dmRoom ? "New DM room created" : "Used existing DM room"}`,
     } else if (error.message.includes("forbidden") || error.message.includes("M_FORBIDDEN")) {
       errorMessage = `Error: Cannot send direct message to ${targetUserId} - they may have blocked DMs or be on a different homeserver`;
     }
-    
+    errorMessage += `\n${getDiagnosticHint(error)}`;
+
     return {
       content: [
         {
@@ -335,7 +336,7 @@ export const sendImageHandler = async (
     console.error(`Failed to send image: ${error.message}`);
     if (shouldEvictClientCache(error)) removeClientFromCache(matrixUserId, homeserverUrl);
     return {
-      content: [{ type: "text", text: `Error: Failed to send image - ${error.message}` }],
+      content: [{ type: "text", text: `Error: Failed to send image - ${error.message}\n${getDiagnosticHint(error)}` }],
       isError: true,
     };
   }

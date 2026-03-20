@@ -16,6 +16,7 @@ jest.unstable_mockModule("../../matrix/client.js", () => ({
 
 jest.unstable_mockModule("../../utils/matrix-errors.js", () => ({
   shouldEvictClientCache: () => false,
+  getDiagnosticHint: () => "Call get-server-health for diagnostics if this persists.",
 }));
 
 // Dynamic imports after mocks

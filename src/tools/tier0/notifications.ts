@@ -2,7 +2,7 @@ import { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { createConfiguredMatrixClient, getAccessToken, getMatrixContext } from "../../utils/server-helpers.js";
 import { removeClientFromCache } from "../../matrix/client.js";
-import { shouldEvictClientCache } from "../../utils/matrix-errors.js";
+import { shouldEvictClientCache, getDiagnosticHint } from "../../utils/matrix-errors.js";
 import { NotificationCountType } from "matrix-js-sdk";
 import { ToolRegistrationFunction } from "../../types/tool-types.js";
 
@@ -103,7 +103,7 @@ Rooms with notifications: ${roomNotifications.length}`,
       content: [
         {
           type: "text",
-          text: `Error: Failed to get notification counts - ${error.message}`,
+          text: `Error: Failed to get notification counts - ${error.message}\n${getDiagnosticHint(error)}`,
         },
       ],
       isError: true,
@@ -213,7 +213,7 @@ Mentions: ${mentionCount}`,
       content: [
         {
           type: "text",
-          text: `Error: Failed to get direct messages - ${error.message}`,
+          text: `Error: Failed to get direct messages - ${error.message}\n${getDiagnosticHint(error)}`,
         },
       ],
       isError: true,

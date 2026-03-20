@@ -3,7 +3,7 @@ import { z } from "zod";
 import { EventType, MatrixClient } from "matrix-js-sdk";
 import { createConfiguredMatrixClient, getAccessToken, getMatrixContext } from "../../utils/server-helpers.js";
 import { removeClientFromCache } from "../../matrix/client.js";
-import { shouldEvictClientCache } from "../../utils/matrix-errors.js";
+import { shouldEvictClientCache, getDiagnosticHint } from "../../utils/matrix-errors.js";
 import { ToolRegistrationFunction } from "../../types/tool-types.js";
 
 // Tool: Search public rooms
@@ -81,7 +81,7 @@ Room ID: ${room.room_id}`,
       content: [
         {
           type: "text" as const,
-          text: `Error: Failed to search public rooms - ${error.message}`,
+          text: `Error: Failed to search public rooms - ${error.message}\n${getDiagnosticHint(error)}`,
         },
       ],
       isError: true,
@@ -215,7 +215,7 @@ export const searchMessagesHandler = async (
     console.error(`Failed to search messages: ${error.message}`);
     if (shouldEvictClientCache(error)) removeClientFromCache(matrixUserId, homeserverUrl);
     return {
-      content: [{ type: "text" as const, text: `Error: Failed to search messages - ${error.message}` }],
+      content: [{ type: "text" as const, text: `Error: Failed to search messages - ${error.message}\n${getDiagnosticHint(error)}` }],
       isError: true,
     };
   }

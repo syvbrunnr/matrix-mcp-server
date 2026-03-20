@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { createConfiguredMatrixClient, getAccessToken, getMatrixContext } from "../../utils/server-helpers.js";
 import { removeClientFromCache } from "../../matrix/client.js";
-import { shouldEvictClientCache } from "../../utils/matrix-errors.js";
+import { shouldEvictClientCache, getDiagnosticHint } from "../../utils/matrix-errors.js";
 import { ToolRegistrationFunction } from "../../types/tool-types.js";
 
 // Tool: Redact (delete) a message
@@ -29,7 +29,7 @@ export const redactEventHandler = async (
     console.error(`Failed to redact event: ${error.message}`);
     if (shouldEvictClientCache(error)) removeClientFromCache(matrixUserId, homeserverUrl);
     return {
-      content: [{ type: "text" as const, text: `Error: Failed to redact event - ${error.message}` }],
+      content: [{ type: "text" as const, text: `Error: Failed to redact event - ${error.message}\n${getDiagnosticHint(error)}` }],
       isError: true,
     };
   }
@@ -66,7 +66,7 @@ export const sendReactionHandler = async (
     console.error(`Failed to send reaction: ${error.message}`);
     if (shouldEvictClientCache(error)) removeClientFromCache(matrixUserId, homeserverUrl);
     return {
-      content: [{ type: "text" as const, text: `Error: Failed to send reaction - ${error.message}` }],
+      content: [{ type: "text" as const, text: `Error: Failed to send reaction - ${error.message}\n${getDiagnosticHint(error)}` }],
       isError: true,
     };
   }
@@ -108,7 +108,7 @@ export const editMessageHandler = async (
     console.error(`Failed to edit message: ${error.message}`);
     if (shouldEvictClientCache(error)) removeClientFromCache(matrixUserId, homeserverUrl);
     return {
-      content: [{ type: "text" as const, text: `Error: Failed to edit message - ${error.message}` }],
+      content: [{ type: "text" as const, text: `Error: Failed to edit message - ${error.message}\n${getDiagnosticHint(error)}` }],
       isError: true,
     };
   }

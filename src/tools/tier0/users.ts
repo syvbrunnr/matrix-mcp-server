@@ -4,7 +4,7 @@ import { existsSync, readFileSync } from "fs";
 import path from "path";
 import { createConfiguredMatrixClient, getAccessToken, getMatrixContext } from "../../utils/server-helpers.js";
 import { removeClientFromCache } from "../../matrix/client.js";
-import { shouldEvictClientCache } from "../../utils/matrix-errors.js";
+import { shouldEvictClientCache, getDiagnosticHint } from "../../utils/matrix-errors.js";
 import { ToolRegistrationFunction } from "../../types/tool-types.js";
 
 // Tool: Get user profile
@@ -68,7 +68,7 @@ Shared Rooms (up to 5): ${
       content: [
         {
           type: "text",
-          text: `Error: Failed to get user profile - ${error.message}`,
+          text: `Error: Failed to get user profile - ${error.message}\n${getDiagnosticHint(error)}`,
         },
       ],
       isError: true,
@@ -167,7 +167,7 @@ E2EE Status: ${e2eeStatus}`,
       content: [
         {
           type: "text",
-          text: `Error: Failed to get your profile - ${error.message}`,
+          text: `Error: Failed to get your profile - ${error.message}\n${getDiagnosticHint(error)}`,
         },
       ],
       isError: true,
@@ -204,7 +204,7 @@ export const getAllUsersHandler = async (_input: any, { requestInfo, authInfo }:
       content: [
         {
           type: "text",
-          text: `Error: Failed to get users - ${error.message}`,
+          text: `Error: Failed to get users - ${error.message}\n${getDiagnosticHint(error)}`,
         },
       ],
       isError: true,
@@ -241,7 +241,7 @@ export const setDisplayNameHandler = async (
       content: [
         {
           type: "text",
-          text: `Error: Failed to set display name - ${error.message}`,
+          text: `Error: Failed to set display name - ${error.message}\n${getDiagnosticHint(error)}`,
         },
       ],
       isError: true,

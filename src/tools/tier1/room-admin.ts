@@ -2,7 +2,7 @@ import { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { createConfiguredMatrixClient, getAccessToken, getMatrixContext } from "../../utils/server-helpers.js";
 import { removeClientFromCache } from "../../matrix/client.js";
-import { shouldEvictClientCache } from "../../utils/matrix-errors.js";
+import { shouldEvictClientCache, getDiagnosticHint } from "../../utils/matrix-errors.js";
 import { ToolRegistrationFunction } from "../../types/tool-types.js";
 
 // Tool: Set room name
@@ -76,7 +76,8 @@ New name: ${roomName}`,
     } else if (error.message.includes("M_LIMIT_EXCEEDED")) {
       errorMessage = `Error: Rate limited when changing room name - please try again later`;
     }
-    
+    errorMessage += `\n${getDiagnosticHint(error)}`;
+
     return {
       content: [
         {
@@ -161,7 +162,8 @@ New topic: ${topic}`,
     } else if (error.message.includes("M_LIMIT_EXCEEDED")) {
       errorMessage = `Error: Rate limited when changing room topic - please try again later`;
     }
-    
+    errorMessage += `\n${getDiagnosticHint(error)}`;
+
     return {
       content: [
         {
@@ -233,6 +235,7 @@ export const setPowerLevelHandler = async (
     } else if (error.message.includes("not found") || error.message.includes("M_NOT_FOUND")) {
       errorMessage = `Error: Room ${roomId} not found`;
     }
+    errorMessage += `\n${getDiagnosticHint(error)}`;
 
     return {
       content: [{ type: "text" as const, text: errorMessage }],
@@ -298,6 +301,7 @@ export const setJoinRulesHandler = async (
     } else if (error.message.includes("not found") || error.message.includes("M_NOT_FOUND")) {
       errorMessage = `Error: Room ${roomId} not found`;
     }
+    errorMessage += `\n${getDiagnosticHint(error)}`;
 
     return {
       content: [{ type: "text" as const, text: errorMessage }],
@@ -363,6 +367,7 @@ export const setHistoryVisibilityHandler = async (
     } else if (error.message.includes("not found") || error.message.includes("M_NOT_FOUND")) {
       errorMessage = `Error: Room ${roomId} not found`;
     }
+    errorMessage += `\n${getDiagnosticHint(error)}`;
 
     return {
       content: [{ type: "text" as const, text: errorMessage }],

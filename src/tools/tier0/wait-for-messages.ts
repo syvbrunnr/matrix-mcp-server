@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { ToolRegistrationFunction } from "../../types/tool-types.js";
 import { getMessageQueue } from "../../matrix/messageQueue.js";
+import { getDiagnosticHint } from "../../utils/matrix-errors.js";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const MAX_TIMEOUT_MS = 300_000; // 5 minutes — hard cap prevents zombie listeners
@@ -35,59 +36,70 @@ export const registerWaitForMessagesTools: ToolRegistrationFunction = (server) =
       { roomId, timeoutMs }: { roomId?: string; timeoutMs: number; since?: string },
       extra: { signal?: AbortSignal }
     ) => {
-      const queue = getMessageQueue();
-      const timeout = Math.min(Math.max(timeoutMs, 1000), MAX_TIMEOUT_MS);
-      const signal = extra?.signal;
+      try {
+        const queue = getMessageQueue();
+        const timeout = Math.min(Math.max(timeoutMs, 1000), MAX_TIMEOUT_MS);
+        const signal = extra?.signal;
 
-      // If already aborted, return immediately
-      if (signal?.aborted) {
-        return formatResponse("aborted", roomId ? queue.peekRoom(roomId) : queue.peek());
-      }
+        // If already aborted, return immediately
+        if (signal?.aborted) {
+          return formatResponse("aborted", roomId ? queue.peekRoom(roomId) : queue.peek());
+        }
 
-      // Check if there are already queued items (room-filtered if specified)
-      let peek = roomId ? queue.peekRoom(roomId) : queue.peek();
+        // Check if there are already queued items (room-filtered if specified)
+        let peek = roomId ? queue.peekRoom(roomId) : queue.peek();
 
-      if (peek.count > 0) {
+        if (peek.count > 0) {
+          return formatResponse("messages_available", peek);
+        }
+
+        // No items — wait for new-item event, timeout, or abort
+        const result = await new Promise<"new_items" | "timeout" | "aborted">((resolve) => {
+          let resolved = false;
+          const done = (value: "new_items" | "timeout" | "aborted") => {
+            if (resolved) return;
+            resolved = true;
+            clearTimeout(timer);
+            queue.removeListener("new-item", onNewItem);
+            signal?.removeEventListener("abort", onAbort);
+            resolve(value);
+          };
+
+          const onNewItem = (evt: { roomId?: string }) => {
+            // If watching a specific room, ignore events for other rooms
+            if (roomId && evt.roomId !== roomId) return;
+            done("new_items");
+          };
+
+          const onAbort = () => done("aborted");
+
+          const timer = setTimeout(() => done("timeout"), timeout);
+
+          queue.on("new-item", onNewItem);
+          signal?.addEventListener("abort", onAbort, { once: true });
+        });
+
+        if (result === "timeout") {
+          return formatResponse("timeout", { count: 0, types: { messages: 0, reactions: 0, invites: 0 }, rooms: [] });
+        }
+
+        if (result === "aborted") {
+          return formatResponse("aborted", roomId ? queue.peekRoom(roomId) : queue.peek());
+        }
+
+        // New items arrived — peek again for counts
+        peek = roomId ? queue.peekRoom(roomId) : queue.peek();
         return formatResponse("messages_available", peek);
-      }
-
-      // No items — wait for new-item event, timeout, or abort
-      const result = await new Promise<"new_items" | "timeout" | "aborted">((resolve) => {
-        let resolved = false;
-        const done = (value: "new_items" | "timeout" | "aborted") => {
-          if (resolved) return;
-          resolved = true;
-          clearTimeout(timer);
-          queue.removeListener("new-item", onNewItem);
-          signal?.removeEventListener("abort", onAbort);
-          resolve(value);
+      } catch (error: any) {
+        console.error(`Failed in wait-for-messages: ${error.message}`);
+        return {
+          content: [{
+            type: "text" as const,
+            text: `Error: Failed waiting for messages - ${error.message}\n${getDiagnosticHint(error)}`,
+          }],
+          isError: true,
         };
-
-        const onNewItem = (evt: { roomId?: string }) => {
-          // If watching a specific room, ignore events for other rooms
-          if (roomId && evt.roomId !== roomId) return;
-          done("new_items");
-        };
-
-        const onAbort = () => done("aborted");
-
-        const timer = setTimeout(() => done("timeout"), timeout);
-
-        queue.on("new-item", onNewItem);
-        signal?.addEventListener("abort", onAbort, { once: true });
-      });
-
-      if (result === "timeout") {
-        return formatResponse("timeout", { count: 0, types: { messages: 0, reactions: 0, invites: 0 }, rooms: [] });
       }
-
-      if (result === "aborted") {
-        return formatResponse("aborted", roomId ? queue.peekRoom(roomId) : queue.peek());
-      }
-
-      // New items arrived — peek again for counts
-      peek = roomId ? queue.peekRoom(roomId) : queue.peek();
-      return formatResponse("messages_available", peek);
     }
   );
 };

@@ -2,7 +2,7 @@ import { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { createConfiguredMatrixClient, getAccessToken, getMatrixContext } from "../../utils/server-helpers.js";
 import { removeClientFromCache } from "../../matrix/client.js";
-import { shouldEvictClientCache } from "../../utils/matrix-errors.js";
+import { shouldEvictClientCache, getDiagnosticHint } from "../../utils/matrix-errors.js";
 import { processMessage, processMessagesByDate, countMessagesByUser } from "../../matrix/messageProcessor.js";
 import { ToolRegistrationFunction } from "../../types/tool-types.js";
 import { sendReadReceipt } from "../../utils/read-receipt.js";
@@ -61,7 +61,7 @@ export const getRoomMessagesHandler = async (
       content: [
         {
           type: "text",
-          text: `Error: Failed to get room messages - ${error.message}`,
+          text: `Error: Failed to get room messages - ${error.message}\n${getDiagnosticHint(error)}`,
         },
       ],
       isError: true,
@@ -117,7 +117,7 @@ export const getMessagesByDateHandler = async (
       content: [
         {
           type: "text",
-          text: `Error: Failed to filter messages by date - ${error.message}`,
+          text: `Error: Failed to filter messages by date - ${error.message}\n${getDiagnosticHint(error)}`,
         },
       ],
       isError: true,
@@ -172,7 +172,7 @@ export const identifyActiveUsersHandler = async (
       content: [
         {
           type: "text",
-          text: `Error: Failed to identify active users - ${error.message}`,
+          text: `Error: Failed to identify active users - ${error.message}\n${getDiagnosticHint(error)}`,
         },
       ],
       isError: true,

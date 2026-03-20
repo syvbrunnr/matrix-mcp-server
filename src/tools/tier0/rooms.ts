@@ -2,7 +2,7 @@ import { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { createConfiguredMatrixClient, getAccessToken, getMatrixContext } from "../../utils/server-helpers.js";
 import { removeClientFromCache } from "../../matrix/client.js";
-import { shouldEvictClientCache } from "../../utils/matrix-errors.js";
+import { shouldEvictClientCache, getDiagnosticHint } from "../../utils/matrix-errors.js";
 import { ToolRegistrationFunction } from "../../types/tool-types.js";
 
 // Tool: List joined rooms
@@ -27,7 +27,7 @@ export const listJoinedRoomsHandler = async (_input: any, { requestInfo, authInf
       content: [
         {
           type: "text",
-          text: `Error: Failed to list joined rooms - ${error.message}`,
+          text: `Error: Failed to list joined rooms - ${error.message}\n${getDiagnosticHint(error)}`,
         },
       ],
       isError: true,
@@ -90,7 +90,7 @@ Created: ${createdAt}`,
       content: [
         {
           type: "text",
-          text: `Error: Failed to get room information - ${error.message}`,
+          text: `Error: Failed to get room information - ${error.message}\n${getDiagnosticHint(error)}`,
         },
       ],
       isError: true,
@@ -145,7 +145,7 @@ export const getRoomMembersHandler = async ({ roomId }: { roomId: string }, { re
       content: [
         {
           type: "text",
-          text: `Error: Failed to get room members - ${error.message}`,
+          text: `Error: Failed to get room members - ${error.message}\n${getDiagnosticHint(error)}`,
         },
       ],
       isError: true,

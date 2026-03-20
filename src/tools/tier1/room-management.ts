@@ -2,7 +2,7 @@ import { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { createConfiguredMatrixClient, getAccessToken, getMatrixContext } from "../../utils/server-helpers.js";
 import { removeClientFromCache } from "../../matrix/client.js";
-import { shouldEvictClientCache } from "../../utils/matrix-errors.js";
+import { shouldEvictClientCache, getDiagnosticHint } from "../../utils/matrix-errors.js";
 import { ToolRegistrationFunction } from "../../types/tool-types.js";
 import { getSubscription, setSubscription } from "../../matrix/notificationSubscriptions.js";
 
@@ -112,7 +112,8 @@ Invited users: ${inviteUsers && inviteUsers.length > 0 ? inviteUsers.join(", ") 
     } else if (error.message.includes("M_FORBIDDEN")) {
       errorMessage = `Error: You don't have permission to create rooms on this homeserver`;
     }
-    
+    errorMessage += `\n${getDiagnosticHint(error)}`;
+
     return {
       content: [
         {
@@ -189,7 +190,8 @@ ${roomIdOrAlias !== roomId ? `Joined via alias: ${roomIdOrAlias}` : ""}`,
     } else if (error.message.includes("M_LIMIT_EXCEEDED")) {
       errorMessage = `Error: Rate limited when trying to join room ${roomIdOrAlias} - please try again later`;
     }
-    
+    errorMessage += `\n${getDiagnosticHint(error)}`;
+
     return {
       content: [
         {
@@ -267,7 +269,8 @@ Room ID: ${roomId}${reason ? `\nReason: ${reason}` : ""}`,
     } else if (error.message.includes("forbidden") || error.message.includes("M_FORBIDDEN")) {
       errorMessage = `Error: Cannot leave room ${roomId} - you may not have permission or may not be a member`;
     }
-    
+    errorMessage += `\n${getDiagnosticHint(error)}`;
+
     return {
       content: [
         {
@@ -384,7 +387,8 @@ The user will receive an invitation and can choose to join the room.`,
     } else if (error.message.includes("M_LIMIT_EXCEEDED")) {
       errorMessage = `Error: Rate limited when inviting user - please try again later`;
     }
-    
+    errorMessage += `\n${getDiagnosticHint(error)}`;
+
     return {
       content: [
         {
