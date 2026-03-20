@@ -14,16 +14,23 @@ import { getMessageQueue, QueuedMessage } from "./messageQueue.js";
 import { getCachedClient } from "./clientCache.js";
 import { readFileSync } from "fs";
 import path from "path";
-import { increment } from "./pipelineMetrics.js";
+import { increment, getMetrics } from "./pipelineMetrics.js";
 
 const DATA_DIR = process.env.MATRIX_DATA_DIR ?? path.join(process.cwd(), ".data");
 const KEEPALIVE_INTERVAL_MS = 5 * 60 * 1000;
 const SYNC_CHECK_INTERVAL_MS = 3 * 60 * 1000;
+/** If no events arrive for this long while sync claims healthy, warn about staleness */
+const STALE_WARN_THRESHOLD_MS = 10 * 60 * 1000;
+/** If sync goes unhealthy and stays unhealthy for this many consecutive checks, attempt restart */
+const MAX_UNHEALTHY_BEFORE_RESTART = 2;
 
 let running = false;
 let keepAliveHandle: ReturnType<typeof setInterval> | null = null;
 let syncCheckHandle: ReturnType<typeof setInterval> | null = null;
 let syncClient: MatrixClient | null = null;
+let consecutiveUnhealthy = 0;
+let totalReconnects = 0;
+let lastReconnectAt: number | null = null;
 
 /**
  * Build set of DM room IDs from m.direct account data + fallback heuristic.
@@ -331,10 +338,38 @@ export async function startAutoSync(): Promise<void> {
     queue.cleanup();
   }, KEEPALIVE_INTERVAL_MS);
 
-  syncCheckHandle = setInterval(() => {
+  syncCheckHandle = setInterval(async () => {
     const state = client.getSyncState();
-    if (state === "STOPPED" || state === null || state === "ERROR") {
-      console.error(`[autoSync] Sync unhealthy (${state})`);
+    const isUnhealthy = state === "STOPPED" || state === null || state === "ERROR";
+
+    if (isUnhealthy) {
+      consecutiveUnhealthy++;
+      console.error(`[autoSync] Sync unhealthy (${state}), consecutive=${consecutiveUnhealthy}`);
+
+      if (consecutiveUnhealthy >= MAX_UNHEALTHY_BEFORE_RESTART) {
+        console.error("[autoSync] Attempting sync restart...");
+        try {
+          client.stopClient();
+          await client.startClient({ initialSyncLimit: 20, pollTimeout: 10_000 });
+          totalReconnects++;
+          lastReconnectAt = Date.now();
+          consecutiveUnhealthy = 0;
+          console.error("[autoSync] Sync restarted successfully");
+        } catch (err: any) {
+          console.error(`[autoSync] Sync restart failed: ${err.message}`);
+        }
+      }
+    } else {
+      consecutiveUnhealthy = 0;
+    }
+
+    // Staleness warning: sync claims healthy but no events for a long time
+    const metrics = getMetrics();
+    if (!isUnhealthy && metrics.lastEventAt) {
+      const silenceMs = Date.now() - metrics.lastEventAt;
+      if (silenceMs > STALE_WARN_THRESHOLD_MS) {
+        console.error(`[autoSync] Stale: sync is ${state} but no events for ${Math.round(silenceMs / 1000)}s`);
+      }
     }
   }, SYNC_CHECK_INTERVAL_MS);
 
@@ -346,6 +381,7 @@ export function stopAutoSync(): void {
   if (syncCheckHandle) { clearInterval(syncCheckHandle); syncCheckHandle = null; }
   syncClient = null;
   running = false;
+  consecutiveUnhealthy = 0;
   console.error("[autoSync] Stopped");
 }
 
@@ -355,4 +391,31 @@ export function isAutoSyncRunning(): boolean {
 
 export function getAutoSyncState(): string | null {
   return syncClient?.getSyncState() ?? null;
+}
+
+export interface SyncHealth {
+  running: boolean;
+  state: string;
+  consecutiveUnhealthy: number;
+  totalReconnects: number;
+  lastReconnectSecondsAgo: number | null;
+  lastEventSecondsAgo: number | null;
+  stale: boolean;
+}
+
+export function getSyncHealth(): SyncHealth {
+  const metrics = getMetrics();
+  const lastEventAge = metrics.lastEventAt ? Math.round((Date.now() - metrics.lastEventAt) / 1000) : null;
+  const syncState = syncClient?.getSyncState() ?? null;
+  const isHealthyState = syncState === "SYNCING" || syncState === "PREPARED";
+
+  return {
+    running,
+    state: syncState ?? "not_started",
+    consecutiveUnhealthy,
+    totalReconnects,
+    lastReconnectSecondsAgo: lastReconnectAt ? Math.round((Date.now() - lastReconnectAt) / 1000) : null,
+    lastEventSecondsAgo: lastEventAge,
+    stale: isHealthyState && lastEventAge !== null && lastEventAge * 1000 > STALE_WARN_THRESHOLD_MS,
+  };
 }

@@ -1,7 +1,7 @@
 import { ToolRegistrationFunction } from "../../types/tool-types.js";
 import { getMetrics } from "../../matrix/pipelineMetrics.js";
 import { getMessageQueue } from "../../matrix/messageQueue.js";
-import { isAutoSyncRunning, getAutoSyncState } from "../../matrix/autoSync.js";
+import { isAutoSyncRunning, getAutoSyncState, getSyncHealth } from "../../matrix/autoSync.js";
 import { getPhase2Status } from "../../matrix/e2eeStatus.js";
 import { getCacheStats } from "../../matrix/clientCache.js";
 import { getMatrixContext } from "../../utils/server-helpers.js";
@@ -89,9 +89,10 @@ export const registerServerAdminTools: ToolRegistrationFunction = (server) => {
       annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
     },
     async () => {
-      // Sync state
+      // Sync state (enhanced with liveness probe data)
       const syncRunning = isAutoSyncRunning();
       const syncState = getAutoSyncState();
+      const syncHealth = getSyncHealth();
 
       // E2EE status
       let e2ee: Record<string, any> | undefined;
@@ -126,10 +127,14 @@ export const registerServerAdminTools: ToolRegistrationFunction = (server) => {
       const mem = process.memoryUsage();
 
       const health = {
-        status: syncRunning && syncState === "SYNCING" ? "healthy" : "degraded",
+        status: syncRunning && syncState === "SYNCING" && !syncHealth.stale ? "healthy" : "degraded",
         sync: {
           running: syncRunning,
           state: syncState ?? "not_started",
+          stale: syncHealth.stale,
+          consecutiveUnhealthy: syncHealth.consecutiveUnhealthy,
+          totalReconnects: syncHealth.totalReconnects,
+          ...(syncHealth.lastReconnectSecondsAgo !== null ? { lastReconnectSecondsAgo: syncHealth.lastReconnectSecondsAgo } : {}),
         },
         e2ee,
         queue: {
