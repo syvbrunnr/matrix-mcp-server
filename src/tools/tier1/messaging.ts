@@ -6,6 +6,21 @@ import { shouldEvictClientCache } from "../../utils/matrix-errors.js";
 import { resolveThreadRoot, buildRelatesTo } from "../../utils/threading.js";
 import { ToolRegistrationFunction } from "../../types/tool-types.js";
 
+/** Strip HTML tags to produce a plaintext fallback body for Matrix messages. */
+function stripHtml(html: string): string {
+  return html
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/p>/gi, "\n")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, "\"")
+    .replace(/&#39;/g, "'")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
 // Tool: Send message
 export const sendMessageHandler = async (
   { roomId, message, messageType, replyToEventId, threadRootEventId }: {
@@ -64,7 +79,7 @@ export const sendMessageHandler = async (
         : "m.text";
       const content: Record<string, any> = {
         msgtype,
-        body: message,
+        body: messageType === "html" ? stripHtml(message) : message,
         "m.relates_to": relatesTo,
       };
       if (messageType === "html") {
@@ -73,7 +88,7 @@ export const sendMessageHandler = async (
       }
       response = await client.sendEvent(roomId, "m.room.message" as any, content as any);
     } else if (messageType === "html") {
-      response = await client.sendHtmlMessage(roomId, message, message);
+      response = await client.sendHtmlMessage(roomId, stripHtml(message), message);
     } else if (messageType === "emote") {
       response = await client.sendEmoteMessage(roomId, message);
     } else {
@@ -112,7 +127,12 @@ Message type: ${messageType}${extras ? ` (${extras})` : ""}`,
 
 // Tool: Send direct message
 export const sendDirectMessageHandler = async (
-  { targetUserId, message }: { targetUserId: string; message: string },
+  { targetUserId, message, messageType, replyToEventId }: {
+    targetUserId: string;
+    message: string;
+    messageType: "text" | "html" | "emote";
+    replyToEventId?: string;
+  },
   { requestInfo, authInfo }: any
 ) => {
   const { matrixUserId, homeserverUrl } = getMatrixContext(requestInfo?.headers);
@@ -182,9 +202,30 @@ export const sendDirectMessageHandler = async (
       }
     }
 
-    // Send the message
-    const response = await client.sendTextMessage(roomId, message);
-    
+    // Send the message with formatting and reply support
+    let response;
+    const relatesTo = replyToEventId ? { "m.in_reply_to": { event_id: replyToEventId } } : undefined;
+
+    if (relatesTo) {
+      const msgtype = messageType === "emote" ? "m.emote" : "m.text";
+      const content: Record<string, any> = {
+        msgtype,
+        body: messageType === "html" ? stripHtml(message) : message,
+        "m.relates_to": relatesTo,
+      };
+      if (messageType === "html") {
+        content.format = "org.matrix.custom.html";
+        content.formatted_body = message;
+      }
+      response = await client.sendEvent(roomId, "m.room.message" as any, content as any);
+    } else if (messageType === "html") {
+      response = await client.sendHtmlMessage(roomId, stripHtml(message), message);
+    } else if (messageType === "emote") {
+      response = await client.sendEmoteMessage(roomId, message);
+    } else {
+      response = await client.sendTextMessage(roomId, message);
+    }
+
     // Get room info for response
     const finalRoom = client.getRoom(roomId) || dmRoom;
     const roomName = finalRoom?.name || `DM with ${targetUserId}`;
@@ -196,6 +237,7 @@ export const sendDirectMessageHandler = async (
           text: `Direct message sent successfully to ${targetUserId}
 Room: ${roomName} (${roomId})
 Event ID: ${response.event_id}
+Message type: ${messageType}${replyToEventId ? ` (reply to ${replyToEventId})` : ""}
 ${!dmRoom ? "New DM room created" : "Used existing DM room"}`,
         },
       ],
@@ -344,12 +386,21 @@ export const registerMessagingTools: ToolRegistrationFunction = (server) => {
     {
       title: "Send Direct Message",
       description: "Send a direct message to a Matrix user. Creates a new DM room if one doesn't exist. " +
+        "Supports plain text, HTML formatting, emotes, and inline replies. " +
         "Note: E2EE message content in DMs may be undecryptable on some homeservers (e.g., Dendrite) due to device key sharing limitations.",
       inputSchema: {
         targetUserId: z
           .string()
           .describe("Target user's Matrix ID (e.g., @user:domain.com)"),
         message: z.string().describe("The message content to send"),
+        messageType: z
+          .enum(["text", "html", "emote"])
+          .default("text")
+          .describe("Type of message: text (plain), html (formatted), or emote (action)"),
+        replyToEventId: z
+          .string()
+          .optional()
+          .describe("Event ID to reply to within the DM conversation"),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
     },
