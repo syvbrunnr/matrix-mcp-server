@@ -7,11 +7,11 @@ import {
 import { getMessageQueue } from "../../matrix/messageQueue.js";
 
 export const subscribeNotificationsHandler = async (
-  { rooms, users, dms, all, mentionsOnly }: { rooms?: string[]; users?: string[]; dms?: boolean; all?: boolean; mentionsOnly?: boolean },
+  { rooms, users, dms, all, mentionsOnly, silentRooms }: { rooms?: string[]; users?: string[]; dms?: boolean; all?: boolean; mentionsOnly?: boolean; silentRooms?: string[] },
   _extra?: any,
   serverRef?: { sendResourceListChanged: () => void }
 ) => {
-  setSubscription({ rooms, users, dms, all, mentionsOnly });
+  setSubscription({ rooms, users, dms, all, mentionsOnly, silentRooms });
   const sub = getSubscription();
   const parts: string[] = [];
   if (sub?.all) parts.push("all events");
@@ -19,6 +19,7 @@ export const subscribeNotificationsHandler = async (
   if (sub?.mentionsOnly) parts.push("@mentions in all rooms");
   if (sub?.rooms?.length) parts.push(`rooms: ${sub.rooms.join(", ")}`);
   if (sub?.users?.length) parts.push(`users: ${sub.users.join(", ")}`);
+  if (sub?.silentRooms?.length) parts.push(`silent rooms (queue only): ${sub.silentRooms.join(", ")}`);
 
   // Notify immediately if there are already queued messages
   const pending = getMessageQueue().peek();
@@ -61,7 +62,8 @@ export const registerNotificationSubscribeTools: ToolRegistrationFunction = (
         "Subscribe to MCP notifications for specific rooms, users, or DMs. " +
         "By default, the server sends no notifications — you must subscribe first. " +
         "Notifications are delivered via sendResourceListChanged and picked up by mcp-notify. " +
-        "Call with all=true to receive all notifications, or specify rooms/users/dms for filtering.",
+        "Call with all=true to receive all notifications, or specify rooms/users/dms for filtering. " +
+        "Use silentRooms for rooms that should queue messages without triggering mcp-notify — useful for batch-checking on a schedule.",
       inputSchema: {
         rooms: z
           .array(z.string())
@@ -83,6 +85,10 @@ export const registerNotificationSubscribeTools: ToolRegistrationFunction = (
           .boolean()
           .optional()
           .describe("Additionally subscribe to @mentions of the bot in any joined room"),
+        silentRooms: z
+          .array(z.string())
+          .optional()
+          .describe("Room IDs that queue messages but do NOT trigger mcp-notify notifications. Messages are retrievable via get-queued-messages for batch-checking on a schedule."),
       },
       annotations: {
         readOnlyHint: false,

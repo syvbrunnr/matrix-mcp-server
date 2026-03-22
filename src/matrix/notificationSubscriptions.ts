@@ -10,6 +10,7 @@ export interface Subscription {
   dms?: boolean;           // watch all DMs
   all?: boolean;           // watch everything
   mentionsOnly?: boolean;  // additionally subscribe to @mentions in any joined room
+  silentRooms?: string[];  // room IDs that queue messages but skip mcp-notify notifications
 }
 
 let subscription: Subscription | null = null;
@@ -38,6 +39,12 @@ export function matchesSubscription(event: {
   if (subscription.users?.length && subscription.users.includes(event.sender)) return true;
   if (subscription.mentionsOnly && event.body && isMention(event.body)) return true;
   return false;
+}
+
+/** Check if a room is in the silent list (queue only, no mcp-notify notification). */
+export function isSilentRoom(roomId: string): boolean {
+  if (!subscription?.silentRooms?.length) return false;
+  return subscription.silentRooms.includes(roomId);
 }
 
 /** Check if a message body mentions the bot's Matrix user ID or localpart. */

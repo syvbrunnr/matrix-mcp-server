@@ -70,6 +70,15 @@ describe("subscribeNotificationsHandler", () => {
     expect(result.content[0].text).toContain("rooms: !r1:ex.com");
   });
 
+  it("subscribes with silent rooms", async () => {
+    mockGetSubscription.mockReturnValue({ dms: true, silentRooms: ["!r1:ex.com", "!r2:ex.com"] } as any);
+
+    const result = await subscribeNotificationsHandler({ dms: true, silentRooms: ["!r1:ex.com", "!r2:ex.com"] });
+    expect(mockSetSubscription).toHaveBeenCalledWith({ dms: true, silentRooms: ["!r1:ex.com", "!r2:ex.com"] });
+    expect(result.content[0].text).toContain("all DMs");
+    expect(result.content[0].text).toContain("silent rooms (queue only): !r1:ex.com, !r2:ex.com");
+  });
+
   it("warns when no filters specified", async () => {
     mockGetSubscription.mockReturnValue({} as any);
 

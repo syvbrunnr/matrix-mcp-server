@@ -12,7 +12,7 @@ import server from "./server.js";
 import { shutdownAllClients } from "./matrix/clientCache.js";
 import { startAutoSync, stopAutoSync } from "./matrix/autoSync.js";
 import { closeMessageQueue, getMessageQueue } from "./matrix/messageQueue.js";
-import { matchesSubscription } from "./matrix/notificationSubscriptions.js";
+import { matchesSubscription, isSilentRoom } from "./matrix/notificationSubscriptions.js";
 
 // Self-wrapping hot-reload: the outer process (no MCP_CHILD env) stays alive and
 // restarts the inner process on clean exit (exit code 0). Claude Code's stdio
@@ -74,6 +74,8 @@ if (!process.env.MCP_CHILD) {
     let pendingHints: string[] = [];
     getMessageQueue().on("new-item", (event: { type?: string; roomId: string; roomName?: string; sender: string; isDM: boolean; body?: string }) => {
       if (!event || !matchesSubscription(event)) return;
+      // Silent rooms: messages are queued (above) but don't trigger mcp-notify notifications
+      if (isSilentRoom(event.roomId)) return;
 
       // Build a brief hint string describing the event type.
       let hint: string;
