@@ -13,6 +13,7 @@ import { shutdownAllClients } from "./matrix/clientCache.js";
 import { startAutoSync, stopAutoSync } from "./matrix/autoSync.js";
 import { closeMessageQueue, getMessageQueue } from "./matrix/messageQueue.js";
 import { matchesSubscription, isSilentRoom } from "./matrix/notificationSubscriptions.js";
+import { increment } from "./matrix/pipelineMetrics.js";
 
 // Self-wrapping hot-reload: the outer process (no MCP_CHILD env) stays alive and
 // restarts the inner process on clean exit (exit code 0). Claude Code's stdio
@@ -79,43 +80,40 @@ if (!process.env.MCP_CHILD) {
       if (!event || !matchesSubscription(event)) return;
       // Silent rooms: messages are queued but don't trigger channel notifications
       if (isSilentRoom(event.roomId)) return;
-
-      // Build content and meta for the channel notification
+      // Build notification — metadata only, no message body (prevents prompt injection)
+      // The agent should call get-queued-messages to retrieve actual content.
+      const meta: Record<string, string> = {
+        room_id: event.roomId,
+        room_name: event.roomName || "",
+      };
       let content: string;
-      const meta: Record<string, string> = {};
 
       if (event.type === "invite") {
-        content = `Room invite from ${event.invitedBy || event.sender}`;
+        content = `Room invite`;
         meta.type = "invite";
-        meta.room_id = event.roomId;
-        meta.room_name = event.roomName || "";
         meta.invited_by = event.invitedBy || event.sender;
       } else if (event.type === "reaction") {
-        content = `${event.emoji || "reaction"} from ${event.sender}`;
+        content = `Reaction`;
         meta.type = "reaction";
-        meta.room_id = event.roomId;
-        meta.room_name = event.roomName || "";
         meta.sender = event.sender;
-        meta.emoji = event.emoji || "";
-        if (event.reactedToEventId) meta.reacted_to = event.reactedToEventId;
       } else {
-        content = event.body || "[no content]";
+        content = event.isDM ? "New DM" : "New message";
         meta.type = "message";
         meta.sender = event.sender;
-        meta.room_id = event.roomId;
-        meta.room_name = event.roomName || "";
         meta.is_dm = String(event.isDM);
         if (event.eventId) meta.event_id = event.eventId;
-        if (event.threadRootEventId) meta.thread_root = event.threadRootEventId;
-        if (event.replyToEventId) meta.reply_to = event.replyToEventId;
       }
 
-      try {
-        server.server.notification({
-          method: "notifications/claude/channel",
-          params: { content, meta },
-        });
-      } catch { /* transport may not be ready */ }
+      server.server.notification({
+        method: "notifications/claude/channel",
+        params: { content, meta },
+      }).then(() => {
+        increment("notificationsSent");
+        console.error(`[channel] Sent: ${meta.type} from ${meta.sender || meta.invited_by || "unknown"}`);
+      }).catch((err: any) => {
+        increment("notificationsFailed");
+        console.error(`[channel] Failed to send: ${err.message}`);
+      });
     });
   }
 

@@ -11,6 +11,7 @@ A comprehensive **Model Context Protocol (MCP) server** that provides secure acc
 - 🏠 **Multi-homeserver Support** with configurable endpoints
 - ♻️ **Hot-reload** — update the server without dropping the MCP connection
 - 🔄 **Sync token persistence** — resumes exactly where it left off after restart
+- 📡 **Real-time notifications** via MCP channels — incoming messages push to the agent as `<channel>` tags
 - 🚀 **Production Ready** with comprehensive error handling
 - 📊 **Rich Responses** with detailed Matrix data
 
@@ -35,6 +36,14 @@ claude mcp add --scope user matrix-server \
   -e MATRIX_PASSWORD=your-matrix-password \
   -- npx github:syvbrunnr/matrix-mcp-server
 ```
+
+To enable real-time message notifications via channels, start Claude Code with:
+
+```bash
+claude --dangerously-load-development-channels server:matrix-server
+```
+
+This allows the server to push incoming messages as `<channel>` tags directly into the conversation. Without this flag, the server still works but notifications won't be delivered — you'd need to poll with `get-queued-messages` instead.
 
 ### Codex
 
@@ -72,6 +81,25 @@ A recovery key is auto-generated on first run and saved to `MATRIX_DATA_DIR/ssss
 ### Known Limitations
 
 - **Encrypted DMs may not work on all homeservers.** Direct messages (1:1 rooms) use E2EE, but some homeservers — notably Dendrite — have known issues with device key distribution and to-device message delivery that prevent Megolm key sharing between devices. Encrypted group rooms are not affected. If you experience undecryptable DMs, this is a homeserver-side limitation, not a bug in this server. Synapse-based homeservers are fully supported.
+
+## Real-time Notifications
+
+The server delivers incoming Matrix messages to the agent in real time using MCP channel notifications. Messages arrive as `<channel source="matrix-server" ...>` tags in the conversation.
+
+### How it works
+
+1. The agent calls `subscribe-notifications` to choose what to listen for (DMs, specific rooms, specific users, or everything)
+2. Incoming messages matching the subscription push a metadata-only notification to the agent (sender, room, type — no message body, to prevent prompt injection)
+3. The agent calls `get-queued-messages` to retrieve actual message content
+
+### Silent rooms
+
+Rooms can be added as `silentRooms` in the subscription. These queue messages without pushing channel notifications — useful for batch-checking on a schedule rather than interrupt-driven delivery.
+
+### Requirements
+
+- Claude Code must be started with `--dangerously-load-development-channels server:matrix-server` to enable channel delivery
+- The agent must call `subscribe-notifications` after startup — the server is silent by default
 
 ## Setup: HTTP server
 
@@ -235,11 +263,37 @@ Connect to `http://localhost:3000/mcp` to authenticate and test all available to
   - `since` (string, optional): Continuation token from a previous call
   - Returns messages as they arrive with a `since` token for duplicate-free follow-up calls; each message includes an `isDM` field
 
+#### **Queue Tools**
+
+- **`get-queued-messages`** - Retrieve queued messages, reactions, and invites
+  - `roomId` (string, optional): Filter by room
+  - `contextMessages` (number, default: 3): Include N recent previous messages per room for context
+  - Non-blocking — returns whatever is currently queued, marks items as fetched
+
+- **`replay-queue`** - Re-read messages from a time window (doesn't affect queue state)
+  - `sinceMinutes` (number): How far back to replay
+  - `roomId` (string, optional): Filter by room
+
 #### **Invite Tools**
 
 - **`get-pending-invites`** - List rooms you've been invited to but not yet joined
   - _No parameters required_
   - Returns room names, IDs, and who sent the invite
+
+#### **Context Tools**
+
+- **`get-event-context`** - Get surrounding messages around a specific event
+  - `roomId` (string): Matrix room ID
+  - `eventId` (string): Event ID to get context for
+  - Returns messages before and after the target event
+
+#### **Diagnostic Tools**
+
+- **`get-server-health`** - Comprehensive health check (sync, E2EE, queue, pipeline)
+  - _No parameters required_
+
+- **`get-pipeline-metrics`** - Event pipeline counters for diagnosing message flow
+  - _No parameters required_
 
 ### ✏️ Tier 1: Action Tools
 
@@ -322,6 +376,18 @@ Connect to `http://localhost:3000/mcp` to authenticate and test all available to
   - `threadRootEventId` (string): Event ID of the thread root
   - `limit` (number, default: 50): Maximum replies to return
   - Returns the root event plus all replies, oldest first
+
+#### **Notification Subscription Tools**
+
+- **`subscribe-notifications`** - Subscribe to real-time channel notifications
+  - `dms` (boolean): Watch all DMs
+  - `rooms` (array): Room IDs to watch
+  - `users` (array): User IDs (senders) to watch
+  - `all` (boolean): Watch everything
+  - `mentionsOnly` (boolean): Watch @mentions in any joined room
+  - `silentRooms` (array): Rooms that queue messages but don't push notifications
+
+- **`unsubscribe-notifications`** - Remove all notification subscriptions
 
 #### **Server Tools**
 

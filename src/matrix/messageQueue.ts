@@ -181,12 +181,12 @@ export class MessageQueue extends EventEmitter {
       msg.decryptionFailed ? 1 : 0, msg.decryptionFailureReason ?? null,
       msg.editedOriginalEventId ?? null
     );
-    if (result.changes > 0) {
-      this.emit("new-item", { type: "message", ...msg });
-      return true;
-    }
-    console.error(`[MessageQueue] Duplicate skipped: ${msg.eventId} in ${msg.roomName} from ${msg.sender}`);
-    return false;
+    // Always emit new-item for notification triggering, even if the DB insert
+    // was a no-op (duplicate). Multiple server instances share the same SQLite
+    // file, so one instance may have already inserted the row — but this
+    // instance still needs to notify its subscribed client.
+    this.emit("new-item", { type: "message", ...msg });
+    return result.changes > 0;
   }
 
   /**

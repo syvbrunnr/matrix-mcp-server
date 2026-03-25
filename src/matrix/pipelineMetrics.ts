@@ -17,6 +17,10 @@ export interface PipelineMetrics {
   reactionsEnqueued: number;
   /** Edits processed */
   editsProcessed: number;
+  /** Channel notifications sent successfully */
+  notificationsSent: number;
+  /** Channel notifications that failed to send */
+  notificationsFailed: number;
   /** Errors caught by try-catch in live listener */
   listenerErrors: number;
   /** Timestamp of first event */
@@ -32,6 +36,8 @@ const metrics: PipelineMetrics = {
   messagesDeduplicated: 0,
   reactionsEnqueued: 0,
   editsProcessed: 0,
+  notificationsSent: 0,
+  notificationsFailed: 0,
   listenerErrors: 0,
   firstEventAt: null,
   lastEventAt: null,

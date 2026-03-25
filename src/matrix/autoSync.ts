@@ -8,7 +8,7 @@
  * Sync token is stored in the queue DB so the client resumes exactly where
  * it left off — no duplicate messages after restart.
  */
-import { RoomEvent, MatrixEvent, MatrixEventEvent, EventType, ClientEvent, MatrixClient } from "matrix-js-sdk";
+import { RoomEvent, MatrixEvent, MatrixEventEvent, EventType, ClientEvent, MatrixClient, ThreadEvent } from "matrix-js-sdk";
 import { createConfiguredMatrixClient, getAccessToken, getMatrixContext } from "../utils/server-helpers.js";
 import { getMessageQueue, QueuedMessage } from "./messageQueue.js";
 import { getCachedClient } from "./clientCache.js";
@@ -290,7 +290,7 @@ export async function startAutoSync(): Promise<void> {
         increment("messagesDeduplicated");
       }
 
-      // For encrypted messages, listen for decryption to update body
+      // For encrypted messages, listen for decryption to update body in the queue DB
       if (enqueued && msg.decryptionFailed) {
         event.once(MatrixEventEvent.Decrypted, () => {
           try {
@@ -309,6 +309,45 @@ export async function startAutoSync(): Promise<void> {
       const etype = event.getType?.() || "unknown";
       console.error(`[autoSync] Live listener error processing event ${eid} (${etype}): ${err.message}`);
     }
+  });
+
+  // Thread replies go to thread timelines, not the room's main timeline.
+  // The client doesn't re-emit ThreadEvent.NewReply, so attach per-room listeners.
+  const attachThreadListener = (room: any) => {
+    room.on(ThreadEvent.NewReply, (_thread: any, event: MatrixEvent) => {
+      try {
+        increment("eventsReceived");
+        const msg = extractQueuedMessage(event, ownUserId, dmRoomIds, client);
+        if (!msg) return;
+        const enqueued = queue.enqueueMessage(msg);
+        if (enqueued) {
+          increment("messagesEnqueued");
+          if (msg.decryptionFailed) {
+            event.once(MatrixEventEvent.Decrypted, () => {
+              try {
+                const decryptedContent = event.getClearContent?.() || event.getContent();
+                if (decryptedContent?.body) {
+                  queue.updateDecryptedBody(msg.eventId, String(decryptedContent.body));
+                }
+              } catch (decErr: any) {
+                console.error(`[autoSync] Decryption update failed for ${msg.eventId}: ${decErr.message}`);
+              }
+            });
+          }
+        }
+      } catch (err: any) {
+        increment("listenerErrors");
+        console.error(`[autoSync] Thread reply listener error: ${err.message}`);
+      }
+    });
+  };
+  // Attach to existing rooms
+  for (const room of client.getRooms()) {
+    attachThreadListener(room);
+  }
+  // Attach to newly joined rooms
+  client.on(ClientEvent.Room, (room: any) => {
+    attachThreadListener(room);
   });
 
   // Live invite detection
