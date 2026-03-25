@@ -1,6 +1,6 @@
 /**
  * In-memory notification subscription store.
- * Controls which events trigger MCP notifications (sendResourceListChanged).
+ * Controls which events trigger channel notifications (notifications/claude/channel).
  * No subscriptions = no notifications (silent by default).
  */
 
@@ -10,7 +10,7 @@ export interface Subscription {
   dms?: boolean;           // watch all DMs
   all?: boolean;           // watch everything
   mentionsOnly?: boolean;  // additionally subscribe to @mentions in any joined room
-  silentRooms?: string[];  // room IDs that queue messages but skip mcp-notify notifications
+  silentRooms?: string[];  // room IDs that queue messages but skip channel notifications
 }
 
 let subscription: Subscription | null = null;
@@ -41,7 +41,7 @@ export function matchesSubscription(event: {
   return false;
 }
 
-/** Check if a room is in the silent list (queue only, no mcp-notify notification). */
+/** Check if a room is in the silent list (queue only, no channel notification). */
 export function isSilentRoom(roomId: string): boolean {
   if (!subscription?.silentRooms?.length) return false;
   return subscription.silentRooms.includes(roomId);

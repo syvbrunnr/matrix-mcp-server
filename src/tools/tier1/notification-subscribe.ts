@@ -8,8 +8,6 @@ import { getMessageQueue } from "../../matrix/messageQueue.js";
 
 export const subscribeNotificationsHandler = async (
   { rooms, users, dms, all, mentionsOnly, silentRooms }: { rooms?: string[]; users?: string[]; dms?: boolean; all?: boolean; mentionsOnly?: boolean; silentRooms?: string[] },
-  _extra?: any,
-  serverRef?: { sendResourceListChanged: () => void }
 ) => {
   setSubscription({ rooms, users, dms, all, mentionsOnly, silentRooms });
   const sub = getSubscription();
@@ -21,18 +19,18 @@ export const subscribeNotificationsHandler = async (
   if (sub?.users?.length) parts.push(`users: ${sub.users.join(", ")}`);
   if (sub?.silentRooms?.length) parts.push(`silent rooms (queue only): ${sub.silentRooms.join(", ")}`);
 
-  // Notify immediately if there are already queued messages
+  // Check for already-queued messages so Claude knows to fetch them
   const pending = getMessageQueue().peek();
-  if (pending.count > 0 && parts.length > 0) {
-    try { serverRef?.sendResourceListChanged(); } catch { /* transport may not be ready */ }
-  }
+  const pendingNote = pending.count > 0
+    ? ` Note: ${pending.count} message(s) already queued — use get-queued-messages to retrieve them.`
+    : "";
 
   return {
     content: [
       {
         type: "text" as const,
         text: parts.length
-          ? `Subscribed to notifications for: ${parts.join("; ")}`
+          ? `Subscribed to notifications for: ${parts.join("; ")}.${pendingNote}`
           : "Subscription set but no filters specified — no notifications will fire. Use all, dms, rooms, or users.",
       },
     ],
@@ -59,11 +57,11 @@ export const registerNotificationSubscribeTools: ToolRegistrationFunction = (
     {
       title: "Subscribe to Notifications",
       description:
-        "Subscribe to MCP notifications for specific rooms, users, or DMs. " +
+        "Subscribe to Matrix message notifications delivered via channel events. " +
         "By default, the server sends no notifications — you must subscribe first. " +
-        "Notifications are delivered via sendResourceListChanged and picked up by mcp-notify. " +
+        "Matching messages arrive as <channel source=\"matrix-server\" ...> tags in real time. " +
         "Call with all=true to receive all notifications, or specify rooms/users/dms for filtering. " +
-        "Use silentRooms for rooms that should queue messages without triggering mcp-notify — useful for batch-checking on a schedule.",
+        "Use silentRooms for rooms that should queue messages without channel delivery — useful for batch-checking on a schedule.",
       inputSchema: {
         rooms: z
           .array(z.string())
@@ -88,7 +86,7 @@ export const registerNotificationSubscribeTools: ToolRegistrationFunction = (
         silentRooms: z
           .array(z.string())
           .optional()
-          .describe("Room IDs that queue messages but do NOT trigger mcp-notify notifications. Messages are retrievable via get-queued-messages for batch-checking on a schedule."),
+          .describe("Room IDs that queue messages but do NOT trigger channel notifications. Messages are retrievable via get-queued-messages for batch-checking on a schedule."),
       },
       annotations: {
         readOnlyHint: false,
@@ -98,7 +96,7 @@ export const registerNotificationSubscribeTools: ToolRegistrationFunction = (
       },
     },
     async (input: any) => {
-      return subscribeNotificationsHandler(input, undefined, server);
+      return subscribeNotificationsHandler(input);
     }
   );
 
@@ -107,7 +105,7 @@ export const registerNotificationSubscribeTools: ToolRegistrationFunction = (
     {
       title: "Unsubscribe from Notifications",
       description:
-        "Remove all notification subscriptions. The server will stop sending MCP notifications.",
+        "Remove all notification subscriptions. The server will stop sending channel notifications.",
       inputSchema: {},
       annotations: {
         readOnlyHint: false,

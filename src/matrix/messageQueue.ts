@@ -182,7 +182,7 @@ export class MessageQueue extends EventEmitter {
       msg.editedOriginalEventId ?? null
     );
     if (result.changes > 0) {
-      this.emit("new-item", { type: "message", roomId: msg.roomId, roomName: msg.roomName, sender: msg.sender, isDM: msg.isDM, body: msg.body });
+      this.emit("new-item", { type: "message", ...msg });
       return true;
     }
     console.error(`[MessageQueue] Duplicate skipped: ${msg.eventId} in ${msg.roomName} from ${msg.sender}`);

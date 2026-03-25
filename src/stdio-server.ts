@@ -66,55 +66,56 @@ if (!process.env.MCP_CHILD) {
     startAutoSync().catch((err) => console.error("[autoSync] Failed to start:", err));
     // Notify Claude Code to re-fetch the tool list (handles hot reload).
     setTimeout(() => server.sendToolListChanged(), 100);
-    // Send MCP notification when new messages arrive (picked up by mcp-notify proxy).
+    // Send channel notifications when new messages arrive.
     // Only fires if the event matches an active subscription (silent by default).
-    // Debounce: coalesce rapid-fire events (e.g. startup backlog) into one notification.
-    // Accumulates _hint strings across the debounce window for message-type distinction.
-    let notifyTimer: ReturnType<typeof setTimeout> | null = null;
-    let pendingHints: string[] = [];
-    getMessageQueue().on("new-item", (event: { type?: string; roomId: string; roomName?: string; sender: string; isDM: boolean; body?: string }) => {
+    // Each message is sent as a separate notifications/claude/channel event
+    // that Claude Code renders as a <channel source="matrix-server" ...> tag.
+    getMessageQueue().on("new-item", (event: {
+      type?: string; eventId?: string; roomId: string; roomName?: string;
+      sender: string; isDM: boolean; body?: string;
+      threadRootEventId?: string; replyToEventId?: string;
+      emoji?: string; reactedToEventId?: string; invitedBy?: string;
+    }) => {
       if (!event || !matchesSubscription(event)) return;
-      // Silent rooms: messages are queued (above) but don't trigger mcp-notify notifications
+      // Silent rooms: messages are queued but don't trigger channel notifications
       if (isSilentRoom(event.roomId)) return;
 
-      // Build a brief hint string describing the event type.
-      let hint: string;
+      // Build content and meta for the channel notification
+      let content: string;
+      const meta: Record<string, string> = {};
+
       if (event.type === "invite") {
-        hint = "invite";
+        content = `Room invite from ${event.invitedBy || event.sender}`;
+        meta.type = "invite";
+        meta.room_id = event.roomId;
+        meta.room_name = event.roomName || "";
+        meta.invited_by = event.invitedBy || event.sender;
       } else if (event.type === "reaction") {
-        hint = "reaction";
-      } else if (event.isDM) {
-        // Extract localpart from @user:domain as a brief display name
-        const localpart = event.sender.replace(/^@/, "").replace(/:.*$/, "");
-        hint = `dm:${localpart}`;
+        content = `${event.emoji || "reaction"} from ${event.sender}`;
+        meta.type = "reaction";
+        meta.room_id = event.roomId;
+        meta.room_name = event.roomName || "";
+        meta.sender = event.sender;
+        meta.emoji = event.emoji || "";
+        if (event.reactedToEventId) meta.reacted_to = event.reactedToEventId;
       } else {
-        const roomLabel = event.roomName || event.roomId;
-        hint = `room:${roomLabel}`;
+        content = event.body || "[no content]";
+        meta.type = "message";
+        meta.sender = event.sender;
+        meta.room_id = event.roomId;
+        meta.room_name = event.roomName || "";
+        meta.is_dm = String(event.isDM);
+        if (event.eventId) meta.event_id = event.eventId;
+        if (event.threadRootEventId) meta.thread_root = event.threadRootEventId;
+        if (event.replyToEventId) meta.reply_to = event.replyToEventId;
       }
-      pendingHints.push(hint);
 
-      if (notifyTimer) clearTimeout(notifyTimer);
-      notifyTimer = setTimeout(() => {
-        notifyTimer = null;
-        // Deduplicate hints, count occurrences
-        const hintCounts = new Map<string, number>();
-        for (const h of pendingHints) {
-          hintCounts.set(h, (hintCounts.get(h) || 0) + 1);
-        }
-        const hintSummary = Array.from(hintCounts.entries())
-          .map(([h, c]) => c > 1 ? `${c}x ${h}` : h)
-          .join(", ");
-        pendingHints = [];
-
-        try {
-          // Send notification with _hint in params for mcp-notify to parse.
-          // Uses server.server (the underlying Server instance) to send arbitrary params.
-          server.server.notification({
-            method: "notifications/resources/list_changed",
-            params: { _hint: hintSummary },
-          });
-        } catch { /* transport may not be ready */ }
-      }, 3000);
+      try {
+        server.server.notification({
+          method: "notifications/claude/channel",
+          params: { content, meta },
+        });
+      } catch { /* transport may not be ready */ }
     });
   }
 

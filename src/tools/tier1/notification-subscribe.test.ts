@@ -87,21 +87,20 @@ describe("subscribeNotificationsHandler", () => {
     expect(result.content[0].text).toContain("no notifications will fire");
   });
 
-  it("triggers sendResourceListChanged when queued messages exist", async () => {
+  it("mentions pending messages when queued messages exist", async () => {
     mockGetSubscription.mockReturnValue({ dms: true } as any);
-    mockGetMessageQueue.mockReturnValue({ peek: () => ({ count: 3, types: { messages: 3, reactions: 0, invites: 0 }, items: [] }) } as any);
-    const mockSendChange = jest.fn();
+    mockGetMessageQueue.mockReturnValue({ peek: () => ({ count: 3, types: { messages: 3, reactions: 0, invites: 0 }, rooms: [] }) } as any);
 
-    await subscribeNotificationsHandler({ dms: true }, undefined, { sendResourceListChanged: mockSendChange });
-    expect(mockSendChange).toHaveBeenCalledTimes(1);
+    const result = await subscribeNotificationsHandler({ dms: true });
+    expect(result.content[0].text).toContain("3 message(s) already queued");
+    expect(result.content[0].text).toContain("get-queued-messages");
   });
 
-  it("does not trigger sendResourceListChanged when queue is empty", async () => {
+  it("does not mention pending messages when queue is empty", async () => {
     mockGetSubscription.mockReturnValue({ dms: true } as any);
-    const mockSendChange = jest.fn();
 
-    await subscribeNotificationsHandler({ dms: true }, undefined, { sendResourceListChanged: mockSendChange });
-    expect(mockSendChange).not.toHaveBeenCalled();
+    const result = await subscribeNotificationsHandler({ dms: true });
+    expect(result.content[0].text).not.toContain("already queued");
   });
 });
 

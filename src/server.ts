@@ -25,15 +25,25 @@ import { registerNotificationSubscribeTools } from "./tools/tier1/notification-s
 // Create MCP server instance
 const server = new McpServer(
   {
-    name: "matrix-mcp-server",
+    name: "matrix-server",
     version: "1.0.0",
   },
   {
     capabilities: {
       logging: {},
-      resources: {},
       tools: {},
+      experimental: {
+        "claude/channel": {},
+      },
     },
+    instructions:
+      "Messages from Matrix arrive as <channel source=\"matrix-server\" ...> tags. " +
+      "Attributes include: sender (full Matrix user ID), room_name, room_id, event_id, is_dm. " +
+      "Thread messages include a thread_root attribute. Replies include reply_to. " +
+      "For DMs, reply using the send-direct-message tool with the sender's user ID. " +
+      "For room messages, reply using the send-message tool with the room_id. " +
+      "Use get-queued-messages for batch retrieval of accumulated messages. " +
+      "Silent rooms queue messages without channel delivery — check them with get-queued-messages on a schedule.",
   }
 );
 
