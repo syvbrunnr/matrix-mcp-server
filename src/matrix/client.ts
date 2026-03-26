@@ -448,6 +448,32 @@ export async function createMatrixClient(
       // Presence may not be supported by all homeservers (e.g., Dendrite)
     }
 
+    // Clean up stale devices: the 'shared_secret_registration' device from initial
+    // Dendrite account creation has wrong crypto keys and confuses other clients'
+    // key sharing (they send Megolm keys to the ghost device instead of the real one).
+    // Delete it on every startup so only the active password-login device remains.
+    if (deviceId && deviceId !== "shared_secret_registration") {
+      try {
+        const devices = await client.getDevices();
+        const staleDevices = (devices?.devices || [])
+          .filter((d: any) => d.device_id !== deviceId && d.device_id === "shared_secret_registration");
+        for (const stale of staleDevices) {
+          try {
+            await client.deleteDevice(stale.device_id, {
+              type: "m.login.password",
+              identifier: { type: "m.id.user", user: userId },
+              password: matrixPassword || "",
+            });
+            console.error(`[Auth] Deleted stale device: ${stale.device_id}`);
+          } catch (delErr: any) {
+            console.error(`[Auth] Failed to delete stale device ${stale.device_id}: ${delErr.message}`);
+          }
+        }
+      } catch (_) {
+        // Best-effort cleanup — don't block startup
+      }
+    }
+
     // Cache the successfully created and synced client
     cacheClient(client, userId, homeserverUrl);
     
