@@ -50,6 +50,11 @@ export function increment(key: keyof Omit<PipelineMetrics, "firstEventAt" | "las
   metrics.lastEventAt = now;
 }
 
+/** Reset the staleness baseline after a sync restart (prevents rapid reconnect loops) */
+export function resetStalenessBaseline(): void {
+  metrics.lastEventAt = Date.now();
+}
+
 export function getMetrics(): PipelineMetrics {
   return { ...metrics };
 }

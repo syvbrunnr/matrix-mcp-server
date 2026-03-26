@@ -14,7 +14,7 @@ import { getMessageQueue, QueuedMessage } from "./messageQueue.js";
 import { getCachedClient } from "./clientCache.js";
 import { readFileSync } from "fs";
 import path from "path";
-import { increment, getMetrics } from "./pipelineMetrics.js";
+import { increment, getMetrics, resetStalenessBaseline } from "./pipelineMetrics.js";
 
 const DATA_DIR = process.env.MATRIX_DATA_DIR ?? path.join(process.cwd(), ".data");
 const KEEPALIVE_INTERVAL_MS = 5 * 60 * 1000;
@@ -414,6 +414,7 @@ export async function startAutoSync(): Promise<void> {
           await client.startClient({ initialSyncLimit: 20, pollTimeout: 10_000 });
           totalReconnects++;
           lastReconnectAt = Date.now();
+          resetStalenessBaseline();
           console.error("[autoSync] Stale sync restarted successfully");
         } catch (err: any) {
           console.error(`[autoSync] Stale sync restart failed: ${err.message}`);
