@@ -157,13 +157,19 @@ export const searchMessagesHandler = async (
   try {
     const client = await createConfiguredMatrixClient(homeserverUrl, matrixUserId, accessToken);
 
-    // Try server-side search first (full history)
+    // Try server-side search first (full history), with timeout fallback
+    const SEARCH_TIMEOUT_MS = 15_000;
     try {
       const filter: any = {};
       if (roomId) filter.rooms = [roomId];
       if (sender) filter.senders = [sender];
 
-      const searchResults = await client.searchRoomEvents({ term: query, filter });
+      const searchResults = await Promise.race([
+        client.searchRoomEvents({ term: query, filter }),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(Object.assign(new Error("Server search timed out after 15s"), { isTimeout: true })), SEARCH_TIMEOUT_MS)
+        ),
+      ]);
       const results = searchResults.results || [];
       const totalCount = searchResults.count ?? results.length;
 
@@ -196,8 +202,9 @@ export const searchMessagesHandler = async (
 
       return { content: [{ type: "text" as const, text: header }, ...formatted] };
     } catch (searchErr: any) {
-      // Server-side search not available — fall back to client-side
-      if (searchErr.httpStatus === 501 || searchErr.httpStatus === 404 || searchErr.httpStatus === 405) {
+      // Server-side search not available or timed out — fall back to client-side
+      if (searchErr.isTimeout || searchErr.httpStatus === 501 || searchErr.httpStatus === 404 || searchErr.httpStatus === 405) {
+        if (searchErr.isTimeout) console.error(`[search-messages] Server search timed out for "${query}" — falling back to synced history`);
         const fallback = clientSideSearch(client, query, roomId, sender, limit);
         if (!fallback) {
           const scope = roomId
