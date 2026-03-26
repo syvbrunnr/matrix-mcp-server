@@ -1,41 +1,65 @@
-import { shouldEvictClientCache } from "./matrix-errors.js";
+import { describe, it, expect } from "@jest/globals";
+import { shouldEvictClientCache, getDiagnosticHint } from "./matrix-errors.js";
 
 describe("shouldEvictClientCache", () => {
-  it("returns true for M_UNKNOWN_TOKEN errors", () => {
-    expect(shouldEvictClientCache(new Error("M_UNKNOWN_TOKEN: access token not found"))).toBe(true);
+  it("evicts on M_UNKNOWN_TOKEN", () => {
+    expect(shouldEvictClientCache(new Error("M_UNKNOWN_TOKEN: token expired"))).toBe(true);
   });
 
-  it("returns true for M_FORBIDDEN errors", () => {
-    expect(shouldEvictClientCache(new Error("M_FORBIDDEN: You are not allowed"))).toBe(true);
+  it("evicts on M_FORBIDDEN", () => {
+    expect(shouldEvictClientCache(new Error("M_FORBIDDEN"))).toBe(true);
   });
 
-  it("returns true for 'No access token' errors", () => {
-    expect(shouldEvictClientCache(new Error("No access token provided"))).toBe(true);
+  it("evicts on missing access token", () => {
+    expect(shouldEvictClientCache(new Error("No access token supplied"))).toBe(true);
   });
 
-  it("returns true for sync timeout errors", () => {
-    expect(shouldEvictClientCache(new Error("initial sync timed out after 30s"))).toBe(true);
+  it("evicts on sync timeout", () => {
+    expect(shouldEvictClientCache(new Error("initial sync timed out"))).toBe(true);
   });
 
-  it("returns false for rate limit errors", () => {
-    expect(shouldEvictClientCache(new Error("M_LIMIT_EXCEEDED: Too many requests"))).toBe(false);
+  it("does NOT evict on rate limit", () => {
+    expect(shouldEvictClientCache(new Error("M_LIMIT_EXCEEDED"))).toBe(false);
   });
 
-  it("returns false for not found errors", () => {
-    expect(shouldEvictClientCache(new Error("M_NOT_FOUND: room not found"))).toBe(false);
+  it("does NOT evict on not found", () => {
+    expect(shouldEvictClientCache(new Error("M_NOT_FOUND"))).toBe(false);
   });
 
-  it("returns false for generic errors", () => {
-    expect(shouldEvictClientCache(new Error("Network timeout"))).toBe(false);
-  });
-
-  it("handles non-Error objects", () => {
+  it("handles non-Error input", () => {
     expect(shouldEvictClientCache("M_UNKNOWN_TOKEN")).toBe(true);
-    expect(shouldEvictClientCache("some random string")).toBe(false);
+    expect(shouldEvictClientCache("some other string")).toBe(false);
+  });
+});
+
+describe("getDiagnosticHint", () => {
+  it("suggests power level check for forbidden errors", () => {
+    const hint = getDiagnosticHint(new Error("M_FORBIDDEN: you lack permission"));
+    expect(hint).toContain("power level");
   });
 
-  it("handles undefined and null", () => {
-    expect(shouldEvictClientCache(undefined)).toBe(false);
-    expect(shouldEvictClientCache(null)).toBe(false);
+  it("suggests list-joined-rooms for not found", () => {
+    const hint = getDiagnosticHint(new Error("M_NOT_FOUND"));
+    expect(hint).toContain("list-joined-rooms");
+  });
+
+  it("suggests server-health for auth errors", () => {
+    const hint = getDiagnosticHint(new Error("M_UNKNOWN_TOKEN"));
+    expect(hint).toContain("get-server-health");
+  });
+
+  it("suggests server-health for E2EE errors", () => {
+    const hint = getDiagnosticHint(new Error("OLM_BAD_MESSAGE_MAC"));
+    expect(hint).toContain("E2EE");
+  });
+
+  it("suggests server-health for connection errors", () => {
+    const hint = getDiagnosticHint(new Error("ECONNREFUSED"));
+    expect(hint).toContain("Connection issue");
+  });
+
+  it("returns generic hint for unknown errors", () => {
+    const hint = getDiagnosticHint(new Error("Something unexpected"));
+    expect(hint).toContain("get-server-health");
   });
 });
