@@ -432,6 +432,14 @@ export function getAutoSyncState(): string | null {
   return syncClient?.getSyncState() ?? null;
 }
 
+/**
+ * Get the sync client for sending read receipts.
+ * Returns null if autoSync is not running.
+ */
+export function getSyncClient(): MatrixClient | null {
+  return syncClient;
+}
+
 export interface SyncHealth {
   running: boolean;
   state: string;

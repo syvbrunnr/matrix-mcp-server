@@ -1,12 +1,34 @@
 import { z } from "zod";
 import { ToolRegistrationFunction } from "../../types/tool-types.js";
 import { getMessageQueue } from "../../matrix/messageQueue.js";
+import { getSyncClient } from "../../matrix/autoSync.js";
 
 export const getQueuedMessagesHandler = async (
   { roomId, contextMessages }: { roomId?: string; contextMessages?: number }
 ) => {
   const queue = getMessageQueue();
   const contents = queue.dequeue(roomId);
+
+  // Send read receipts for dequeued messages (best-effort, non-blocking)
+  if (contents.messages.length > 0) {
+    const client = getSyncClient();
+    if (client) {
+      // Group by room, send receipt for the latest message per room
+      const latestByRoom = new Map<string, string>();
+      for (const msg of contents.messages) {
+        latestByRoom.set(msg.roomId, msg.eventId);
+      }
+      for (const [rid, eid] of latestByRoom) {
+        const room = client.getRoom(rid);
+        const event = room?.findEventById(eid);
+        if (event) {
+          client.sendReadReceipt(event).catch((err: any) =>
+            console.error(`[read-receipt] Failed for ${rid}: ${err.message}`)
+          );
+        }
+      }
+    }
+  }
 
   // Build context if requested
   const ctxLimit = Math.min(Math.max(contextMessages ?? 3, 0), 10);
