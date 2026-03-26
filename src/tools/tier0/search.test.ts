@@ -532,6 +532,25 @@ describe("searchMessagesHandler", () => {
     expect(result.content[0].text).toContain("get-server-health");
   });
 
+  it("falls back to client-side search on server timeout", async () => {
+    // searchRoomEvents hangs beyond 15s → timeout fires → fallback
+    const client = {
+      searchRoomEvents: jest.fn<any>().mockImplementation(
+        () => new Promise((_, reject) => setTimeout(() => reject(Object.assign(new Error("timeout"), { isTimeout: true })), 10))
+      ),
+      getRooms: jest.fn<any>().mockReturnValue([]),
+      getRoom: jest.fn<any>().mockReturnValue(null),
+    };
+    mockCreateClient.mockResolvedValue(client as any);
+
+    const result = await searchMessagesHandler(
+      { query: "test", limit: 20 },
+      reqContext
+    );
+    // Falls back to client-side which finds no rooms → "No messages" response
+    expect(result.content[0].text).toContain("No messages");
+  });
+
   it("returns error with diagnostic hint on client creation failure", async () => {
     mockCreateClient.mockRejectedValue(new Error("M_UNKNOWN_TOKEN"));
 
