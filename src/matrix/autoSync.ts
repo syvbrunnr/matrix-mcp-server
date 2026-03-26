@@ -402,11 +402,23 @@ export async function startAutoSync(): Promise<void> {
       consecutiveUnhealthy = 0;
     }
 
-    // Staleness warning: sync claims healthy but no events for a long time
+    // Staleness check: sync claims healthy but no events for a long time
     const metrics = getMetrics();
     if (!isUnhealthy && metrics.lastEventAt) {
       const silenceMs = Date.now() - metrics.lastEventAt;
-      if (silenceMs > STALE_WARN_THRESHOLD_MS) {
+      if (silenceMs > STALE_WARN_THRESHOLD_MS * 2) {
+        // Double the threshold = force restart (not just warn)
+        console.error(`[autoSync] Stale for ${Math.round(silenceMs / 1000)}s — forcing sync restart`);
+        try {
+          client.stopClient();
+          await client.startClient({ initialSyncLimit: 20, pollTimeout: 10_000 });
+          totalReconnects++;
+          lastReconnectAt = Date.now();
+          console.error("[autoSync] Stale sync restarted successfully");
+        } catch (err: any) {
+          console.error(`[autoSync] Stale sync restart failed: ${err.message}`);
+        }
+      } else if (silenceMs > STALE_WARN_THRESHOLD_MS) {
         console.error(`[autoSync] Stale: sync is ${state} but no events for ${Math.round(silenceMs / 1000)}s`);
       }
     }
