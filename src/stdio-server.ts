@@ -51,6 +51,15 @@ if (!process.env.MCP_CHILD) {
   // Stdout is reserved for MCP JSON-RPC. Redirect console.log to stderr.
   console.log = (...args: unknown[]) => console.error(...args);
 
+  // Prevent unhandled rejections from crashing the inner process.
+  // matrix-js-sdk throws these on network blips during long sessions.
+  process.on("unhandledRejection", (reason) => {
+    console.error("[inner] Unhandled rejection (suppressed):", reason);
+  });
+  process.on("uncaughtException", (err) => {
+    console.error("[inner] Uncaught exception (suppressed):", err.message);
+  });
+
   const required = ["MATRIX_USER_ID", "MATRIX_ACCESS_TOKEN", "MATRIX_HOMESERVER_URL"] as const;
   const missing = required.filter((key) => !process.env[key]);
   if (missing.length > 0) {
