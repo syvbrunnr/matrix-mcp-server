@@ -396,24 +396,20 @@ export async function startAutoSync(): Promise<void> {
       console.error(`[autoSync] Crypto heartbeat failed: ${cryptoErr.message}`);
     }
 
-    // HTTP heartbeat: detect silent connection death
+    // HTTP heartbeat: detect silent connection death.
+    // NOTE: Do NOT call stopClient() here — it kills the crypto backend (cryptoBackend.stop())
+    // and startClient() does NOT reinitialize it. This breaks inbound E2EE decryption permanently.
+    // Instead, just log the failure and let the SDK's internal reconnection handle recovery.
     try {
       await Promise.race([
         client.whoami(),
         new Promise<never>((_, reject) => setTimeout(() => reject(new Error("whoami timeout")), 5_000)),
       ]);
     } catch (err: any) {
-      console.error(`[autoSync] Heartbeat failed (${err.message}) — forcing sync restart`);
-      try {
-        client.stopClient();
-        await client.startClient({ initialSyncLimit: 20, pollTimeout: 10_000 });
-        totalReconnects++;
-        lastReconnectAt = Date.now();
-        resetStalenessBaseline();
-        console.error("[autoSync] Heartbeat-triggered restart successful");
-      } catch (restartErr: any) {
-        console.error(`[autoSync] Heartbeat restart failed: ${restartErr.message}`);
-      }
+      console.error(`[autoSync] Heartbeat failed (${err.message}) — relying on SDK auto-reconnect`);
+      totalReconnects++;
+      lastReconnectAt = Date.now();
+      resetStalenessBaseline();
     }
   }, KEEPALIVE_INTERVAL_MS);
 
@@ -426,16 +422,19 @@ export async function startAutoSync(): Promise<void> {
       console.error(`[autoSync] Sync unhealthy (${state}), consecutive=${consecutiveUnhealthy}`);
 
       if (consecutiveUnhealthy >= MAX_UNHEALTHY_BEFORE_RESTART) {
-        console.error("[autoSync] Attempting sync restart...");
+        // NOTE: Do NOT call stopClient() — it kills crypto permanently.
+        // Instead, try startClient() without stopping first. If sync is already
+        // stopped, this should resume it. If it's in an error state, the SDK
+        // should handle reconnection internally.
+        console.error("[autoSync] Sync unhealthy, attempting resume without crypto disruption...");
         try {
-          client.stopClient();
           await client.startClient({ initialSyncLimit: 20, pollTimeout: 10_000 });
           totalReconnects++;
           lastReconnectAt = Date.now();
           consecutiveUnhealthy = 0;
-          console.error("[autoSync] Sync restarted successfully");
+          console.error("[autoSync] Sync resumed successfully");
         } catch (err: any) {
-          console.error(`[autoSync] Sync restart failed: ${err.message}`);
+          console.error(`[autoSync] Sync resume failed: ${err.message}`);
         }
       }
     } else {
@@ -447,17 +446,17 @@ export async function startAutoSync(): Promise<void> {
     if (!isUnhealthy && metrics.lastEventAt) {
       const silenceMs = Date.now() - metrics.lastEventAt;
       if (silenceMs > STALE_WARN_THRESHOLD_MS * 2) {
-        // Double the threshold = force restart (not just warn)
-        console.error(`[autoSync] Stale for ${Math.round(silenceMs / 1000)}s — forcing sync restart`);
+        // Double the threshold = try to resume without killing crypto.
+        // NOTE: stopClient() kills cryptoBackend.stop() permanently — never call it.
+        console.error(`[autoSync] Stale for ${Math.round(silenceMs / 1000)}s — attempting resume`);
         try {
-          client.stopClient();
           await client.startClient({ initialSyncLimit: 20, pollTimeout: 10_000 });
           totalReconnects++;
           lastReconnectAt = Date.now();
           resetStalenessBaseline();
-          console.error("[autoSync] Stale sync restarted successfully");
+          console.error("[autoSync] Stale sync resumed successfully");
         } catch (err: any) {
-          console.error(`[autoSync] Stale sync restart failed: ${err.message}`);
+          console.error(`[autoSync] Stale sync resume failed: ${err.message}`);
         }
       } else if (silenceMs > STALE_WARN_THRESHOLD_MS) {
         console.error(`[autoSync] Stale: sync is ${state} but no events for ${Math.round(silenceMs / 1000)}s`);
