@@ -376,6 +376,26 @@ export async function startAutoSync(): Promise<void> {
     dmRoomIds = buildDmRoomSet(client);
     queue.cleanup();
 
+    // Crypto heartbeat: exercise the Olm send path on encrypted DM rooms.
+    // Without periodic send-side activity, the Rust crypto module's Olm sessions
+    // degrade after ~2h of receive-only operation (see friction:olm-session-degradation-idle).
+    // prepareToEncrypt warms the session without actually sending a message.
+    try {
+      const crypto = client.getCrypto();
+      if (crypto) {
+        for (const rid of dmRoomIds) {
+          const room = client.getRoom(rid);
+          if (room && room.hasEncryptionStateEvent()) {
+            try {
+              crypto.prepareToEncrypt(room);
+            } catch (_) { /* best-effort */ }
+          }
+        }
+      }
+    } catch (cryptoErr: any) {
+      console.error(`[autoSync] Crypto heartbeat failed: ${cryptoErr.message}`);
+    }
+
     // HTTP heartbeat: detect silent connection death
     try {
       await Promise.race([
