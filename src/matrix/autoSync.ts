@@ -369,12 +369,32 @@ export async function startAutoSync(): Promise<void> {
   });
 
   // --- Maintenance intervals ---
-  keepAliveHandle = setInterval(() => {
+  keepAliveHandle = setInterval(async () => {
     getCachedClient(matrixUserId, homeserverUrl);
     const token = client.store.getSyncToken();
     if (token) queue.setSyncToken(token);
     dmRoomIds = buildDmRoomSet(client);
     queue.cleanup();
+
+    // HTTP heartbeat: detect silent connection death
+    try {
+      await Promise.race([
+        client.whoami(),
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error("whoami timeout")), 5_000)),
+      ]);
+    } catch (err: any) {
+      console.error(`[autoSync] Heartbeat failed (${err.message}) — forcing sync restart`);
+      try {
+        client.stopClient();
+        await client.startClient({ initialSyncLimit: 20, pollTimeout: 10_000 });
+        totalReconnects++;
+        lastReconnectAt = Date.now();
+        resetStalenessBaseline();
+        console.error("[autoSync] Heartbeat-triggered restart successful");
+      } catch (restartErr: any) {
+        console.error(`[autoSync] Heartbeat restart failed: ${restartErr.message}`);
+      }
+    }
   }, KEEPALIVE_INTERVAL_MS);
 
   syncCheckHandle = setInterval(async () => {
