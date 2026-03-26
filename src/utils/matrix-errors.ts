@@ -10,6 +10,8 @@ const EVICT_PATTERNS = [
   "M_FORBIDDEN",
   "No access token",
   "initial sync timed out",
+  "Cannot ensure Olm sessions",
+  "null pointer passed to rust",
 ];
 
 export function shouldEvictClientCache(error: unknown): boolean {

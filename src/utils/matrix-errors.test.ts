@@ -18,6 +18,14 @@ describe("shouldEvictClientCache", () => {
     expect(shouldEvictClientCache(new Error("initial sync timed out"))).toBe(true);
   });
 
+  it("evicts on Olm session failure", () => {
+    expect(shouldEvictClientCache(new Error("Cannot ensure Olm sessions: shutting down"))).toBe(true);
+  });
+
+  it("evicts on crypto rust null pointer", () => {
+    expect(shouldEvictClientCache(new Error("null pointer passed to rust"))).toBe(true);
+  });
+
   it("does NOT evict on rate limit", () => {
     expect(shouldEvictClientCache(new Error("M_LIMIT_EXCEEDED"))).toBe(false);
   });
