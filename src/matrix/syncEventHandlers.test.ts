@@ -1,5 +1,5 @@
 import { describe, it, expect, jest, beforeEach, afterEach } from "@jest/globals";
-import { buildDmRoomSet, extractQueuedMessage, scheduleDecryptionRetries } from "./syncEventHandlers.js";
+import { buildDmRoomSet, extractQueuedMessage, scheduleDecryptionRetries, handleEditEvent } from "./syncEventHandlers.js";
 import { EventType } from "matrix-js-sdk";
 
 // ── Mocks ──────────────────────────────────────────────────────────────────
@@ -275,5 +275,95 @@ describe("scheduleDecryptionRetries", () => {
     return Promise.resolve().then(() => {
       expect(queue.updateDecryptedBody).not.toHaveBeenCalled();
     });
+  });
+});
+
+describe("handleEditEvent", () => {
+  function mockEditEvent(opts: {
+    sender?: string;
+    originalEventId?: string;
+    newBody?: string;
+    roomId?: string;
+    id?: string;
+  }): any {
+    const content = {
+      "m.relates_to": {
+        rel_type: "m.replace",
+        event_id: opts.originalEventId ?? "$orig1",
+      },
+      "m.new_content": { body: opts.newBody ?? "edited text" },
+    };
+    return {
+      getSender: () => opts.sender ?? "@alice:ex.com",
+      getRoomId: () => opts.roomId ?? "!room:ex.com",
+      getId: () => opts.id ?? "$edit1",
+      getTs: () => 3000,
+      getContent: () => content,
+      getClearContent: () => content,
+    };
+  }
+
+  function mockEditQueue(editResult: "in-place" | "fetched" | "not-found"): any {
+    return {
+      tryEditInPlace: jest.fn().mockReturnValue(editResult),
+      enqueueMessage: jest.fn(),
+    };
+  }
+
+  it("skips own edits", () => {
+    const event = mockEditEvent({ sender: "@mimir:ex.com" });
+    const queue = mockEditQueue("in-place");
+    const client = mockClient();
+    handleEditEvent(event, "@mimir:ex.com", new Set(), client, queue);
+    expect(queue.tryEditInPlace).not.toHaveBeenCalled();
+  });
+
+  it("skips events without m.replace rel_type", () => {
+    const event = {
+      getSender: () => "@alice:ex.com",
+      getClearContent: () => ({ "m.relates_to": { rel_type: "m.thread" } }),
+      getContent: () => ({ "m.relates_to": { rel_type: "m.thread" } }),
+    };
+    const queue = mockEditQueue("in-place");
+    const client = mockClient();
+    handleEditEvent(event as any, "@mimir:ex.com", new Set(), client, queue);
+    expect(queue.tryEditInPlace).not.toHaveBeenCalled();
+  });
+
+  it("calls tryEditInPlace with original event ID and new body", () => {
+    const event = mockEditEvent({ originalEventId: "$orig99", newBody: "updated" });
+    const queue = mockEditQueue("in-place");
+    const client = mockClient();
+    handleEditEvent(event as any, "@mimir:ex.com", new Set(), client, queue);
+    expect(queue.tryEditInPlace).toHaveBeenCalledWith("$orig99", "updated");
+    expect(queue.enqueueMessage).not.toHaveBeenCalled();
+  });
+
+  it("enqueues new message when original was already fetched", () => {
+    const event = mockEditEvent({
+      originalEventId: "$orig99",
+      newBody: "late edit",
+      roomId: "!dm:ex.com",
+    });
+    const queue = mockEditQueue("fetched");
+    const client = mockClient({ rooms: [{ roomId: "!dm:ex.com", name: "DM", joinedMembers: 2 }] });
+    const dmRoomIds = new Set(["!dm:ex.com"]);
+    handleEditEvent(event as any, "@mimir:ex.com", dmRoomIds, client, queue);
+    expect(queue.enqueueMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        body: "late edit",
+        editedOriginalEventId: "$orig99",
+        isDM: true,
+      }),
+    );
+  });
+
+  it("does nothing when original was not found", () => {
+    const event = mockEditEvent({});
+    const queue = mockEditQueue("not-found");
+    const client = mockClient();
+    handleEditEvent(event as any, "@mimir:ex.com", new Set(), client, queue);
+    expect(queue.tryEditInPlace).toHaveBeenCalled();
+    expect(queue.enqueueMessage).not.toHaveBeenCalled();
   });
 });
