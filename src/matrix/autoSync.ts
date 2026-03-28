@@ -270,9 +270,10 @@ export async function startAutoSync(): Promise<void> {
   for (const room of client.getRooms()) {
     attachThreadListener(room);
   }
-  // Attach to newly joined rooms
+  // Attach to newly joined rooms and rebuild DM set so new DMs are recognized immediately
   client.on(ClientEvent.Room, (room: any) => {
     attachThreadListener(room);
+    dmRoomIds = buildDmRoomSet(client);
   });
 
   // Live invite detection
