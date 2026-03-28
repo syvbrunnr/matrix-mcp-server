@@ -1,5 +1,5 @@
-import { describe, it, expect } from "@jest/globals";
-import { buildDmRoomSet, extractQueuedMessage } from "./syncEventHandlers.js";
+import { describe, it, expect, jest, beforeEach, afterEach } from "@jest/globals";
+import { buildDmRoomSet, extractQueuedMessage, scheduleDecryptionRetries } from "./syncEventHandlers.js";
 import { EventType } from "matrix-js-sdk";
 
 // ── Mocks ──────────────────────────────────────────────────────────────────
@@ -167,5 +167,113 @@ describe("extractQueuedMessage", () => {
     expect(msg).not.toBeNull();
     expect(msg!.body).toBe("[encrypted]");
     expect(msg!.decryptionFailed).toBe(true);
+  });
+});
+
+describe("scheduleDecryptionRetries", () => {
+  beforeEach(() => {
+    jest.useFakeTimers();
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
+  function mockEncryptedEvent(opts: { body?: string; decryptSucceeds?: boolean } = {}): any {
+    let decryptedBody = opts.body ?? null;
+    const listeners: Record<string, Function[]> = {};
+    return {
+      once: (eventName: string, cb: Function) => {
+        if (!listeners[eventName]) listeners[eventName] = [];
+        listeners[eventName].push(cb);
+      },
+      getClearContent: () => (decryptedBody ? { body: decryptedBody } : {}),
+      getContent: () => ({}),
+      attemptDecryption: async () => {
+        if (opts.decryptSucceeds) {
+          decryptedBody = "decrypted message";
+        }
+      },
+      _fireDecrypted: () => {
+        for (const cb of listeners["Event.decrypted"] || []) cb();
+      },
+    };
+  }
+
+  function mockQueue(): any {
+    return {
+      updateDecryptedBody: jest.fn(),
+    };
+  }
+
+  function mockCryptoClient(): any {
+    return {
+      getCrypto: () => ({}),
+    };
+  }
+
+  it("registers a Decrypted event listener", () => {
+    const event = mockEncryptedEvent();
+    const queue = mockQueue();
+    const client = mockCryptoClient();
+    scheduleDecryptionRetries(event as any, "$enc1", client, queue);
+
+    // Simulate SDK decryption event
+    (event as any)._fireDecrypted();
+    // No body in getClearContent, so updateDecryptedBody should not be called
+    expect(queue.updateDecryptedBody).not.toHaveBeenCalled();
+  });
+
+  it("updates queue when Decrypted event fires with body", () => {
+    const event = mockEncryptedEvent({ body: "hello decrypted" });
+    const queue = mockQueue();
+    const client = mockCryptoClient();
+    scheduleDecryptionRetries(event as any, "$enc2", client, queue);
+
+    event._fireDecrypted();
+    expect(queue.updateDecryptedBody).toHaveBeenCalledWith("$enc2", "hello decrypted");
+  });
+
+  it("schedules 3 retry attempts at 2s, 5s, 15s", () => {
+    const event = mockEncryptedEvent({ decryptSucceeds: true });
+    const queue = mockQueue();
+    const client = mockCryptoClient();
+    scheduleDecryptionRetries(event as any, "$enc3", client, queue);
+
+    // No calls before any timer fires
+    expect(queue.updateDecryptedBody).not.toHaveBeenCalled();
+
+    // Advance to 2s — first retry fires and succeeds
+    jest.advanceTimersByTime(2000);
+    // Need to flush promises for async setTimeout callbacks
+    return Promise.resolve().then(() => {
+      expect(queue.updateDecryptedBody).toHaveBeenCalledWith("$enc3", "decrypted message");
+    });
+  });
+
+  it("skips retry if already decrypted", () => {
+    const event = mockEncryptedEvent({ body: "already decrypted" });
+    const queue = mockQueue();
+    const client = mockCryptoClient();
+    scheduleDecryptionRetries(event as any, "$enc4", client, queue);
+
+    jest.advanceTimersByTime(2000);
+    return Promise.resolve().then(() => {
+      // Should not call updateDecryptedBody from retry since body already exists
+      // (only from the Decrypted event listener if fired)
+      expect(queue.updateDecryptedBody).not.toHaveBeenCalled();
+    });
+  });
+
+  it("handles client with no crypto gracefully", () => {
+    const event = mockEncryptedEvent();
+    const queue = mockQueue();
+    const client = { getCrypto: () => null };
+    scheduleDecryptionRetries(event as any, "$enc5", client as any, queue);
+
+    jest.advanceTimersByTime(15000);
+    return Promise.resolve().then(() => {
+      expect(queue.updateDecryptedBody).not.toHaveBeenCalled();
+    });
   });
 });

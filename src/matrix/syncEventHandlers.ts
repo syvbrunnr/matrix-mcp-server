@@ -4,7 +4,7 @@
  * Pure functions for processing Matrix sync events: DM detection,
  * message extraction, and edit handling.
  */
-import { MatrixEvent, EventType, MatrixClient } from "matrix-js-sdk";
+import { MatrixEvent, MatrixEventEvent, EventType, MatrixClient } from "matrix-js-sdk";
 import { getMessageQueue, QueuedMessage } from "./messageQueue.js";
 
 /**
@@ -126,4 +126,49 @@ export function handleEditEvent(
   }
   // "in-place" — already updated, nothing more to do
   // "not-found" — original was never queued (e.g. own message), skip
+}
+
+/**
+ * Set up decryption recovery for an encrypted message that failed initial decryption.
+ * Registers both an event listener (for when keys arrive via sync) and timed retries
+ * (for when keys arrive via key backup or to-device messages with a delay).
+ */
+export function scheduleDecryptionRetries(
+  event: MatrixEvent,
+  eventId: string,
+  client: MatrixClient,
+  queue: ReturnType<typeof getMessageQueue>,
+): void {
+  // Listen for SDK-triggered decryption (keys arrive via sync)
+  event.once(MatrixEventEvent.Decrypted, () => {
+    try {
+      const decryptedContent = event.getClearContent?.() || event.getContent();
+      if (decryptedContent?.body) {
+        queue.updateDecryptedBody(eventId, String(decryptedContent.body));
+      }
+    } catch (decErr: any) {
+      console.error(`[autoSync] Decryption update failed for ${eventId}: ${decErr.message}`);
+    }
+  });
+
+  // Timed retries — room keys may arrive via key backup or to-device messages
+  const retryDelays = [2000, 5000, 15000]; // 2s, 5s, 15s
+  for (const delay of retryDelays) {
+    setTimeout(async () => {
+      try {
+        const crypto = client.getCrypto?.();
+        if (!crypto) return;
+        const currentContent = event.getClearContent?.();
+        if (currentContent?.body) return; // Already decrypted
+        await (event as any).attemptDecryption(crypto);
+        const retryContent = event.getClearContent?.() || event.getContent();
+        if (retryContent?.body && retryContent.body !== "[encrypted]") {
+          queue.updateDecryptedBody(eventId, String(retryContent.body));
+          console.error(`[autoSync] Decryption retry succeeded for ${eventId} after ${delay}ms`);
+        }
+      } catch {
+        // Silent — retries are best-effort
+      }
+    }, delay);
+  }
 }
