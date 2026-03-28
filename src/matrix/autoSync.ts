@@ -15,6 +15,7 @@ import { getCachedClient } from "./clientCache.js";
 import { readFileSync } from "fs";
 import path from "path";
 import { increment, getMetrics, resetStalenessBaseline } from "./pipelineMetrics.js";
+import { buildDmRoomSet, extractQueuedMessage, handleEditEvent } from "./syncEventHandlers.js";
 
 const DATA_DIR = process.env.MATRIX_DATA_DIR ?? path.join(process.cwd(), ".data");
 const KEEPALIVE_INTERVAL_MS = 5 * 60 * 1000;
@@ -31,127 +32,6 @@ let syncClient: MatrixClient | null = null;
 let consecutiveUnhealthy = 0;
 let totalReconnects = 0;
 let lastReconnectAt: number | null = null;
-
-/**
- * Build set of DM room IDs from m.direct account data + fallback heuristic.
- */
-function buildDmRoomSet(client: MatrixClient): Set<string> {
-  const dmRoomIds = new Set<string>();
-
-  const mDirectContent = (client.getAccountData(EventType.Direct) as any)?.getContent() ?? {};
-  for (const rooms of Object.values(mDirectContent)) {
-    if (Array.isArray(rooms)) {
-      for (const rid of rooms) {
-        if (typeof rid === "string" && rid.startsWith("!")) dmRoomIds.add(rid);
-      }
-    }
-  }
-
-  // Fallback: 2-member non-public rooms
-  for (const room of client.getRooms()) {
-    if (!dmRoomIds.has(room.roomId)) {
-      const joinRule = room.currentState.getStateEvents("m.room.join_rules", "")?.getContent()?.join_rule;
-      if (joinRule !== "public" && room.getJoinedMemberCount() === 2) {
-        dmRoomIds.add(room.roomId);
-      }
-    }
-  }
-
-  return dmRoomIds;
-}
-
-/**
- * Extract a QueuedMessage from a Matrix event, or null if should be skipped.
- */
-function extractQueuedMessage(
-  event: MatrixEvent,
-  ownUserId: string | null,
-  dmRoomIds: Set<string>,
-  client: MatrixClient,
-): QueuedMessage | null {
-  const evtType = event.getType();
-  if (evtType !== EventType.RoomMessage && evtType !== EventType.RoomMessageEncrypted) return null;
-  if (event.getSender() === ownUserId) return null;
-
-  const content = event.getClearContent?.() || event.getContent();
-  const relatesTo = content?.["m.relates_to"];
-  // m.replace events are handled separately (edit logic)
-  if (relatesTo?.rel_type === "m.replace") return null;
-  if (event.isRedacted()) return null;
-
-  const eid = event.getId();
-  if (!eid) return null;
-
-  const evtRoomId = event.getRoomId() || "";
-  const room = client.getRoom(evtRoomId);
-  const isEncrypted = evtType === EventType.RoomMessageEncrypted;
-
-  return {
-    eventId: eid,
-    roomId: evtRoomId,
-    roomName: room?.name || evtRoomId,
-    sender: event.getSender() || "",
-    body: String(content?.body || (isEncrypted ? "[encrypted]" : "")),
-    timestamp: event.getTs(),
-    isDM: dmRoomIds.has(evtRoomId),
-    ...(relatesTo?.rel_type === "io.element.thread" || relatesTo?.rel_type === "m.thread"
-      ? { threadRootEventId: relatesTo.event_id } : {}),
-    ...(relatesTo?.["m.in_reply_to"]?.event_id
-      ? { replyToEventId: relatesTo["m.in_reply_to"].event_id } : {}),
-    ...(isEncrypted && !content?.body ? { decryptionFailed: true } : {}),
-    ...((isEncrypted && !content?.body && (event as any).decryptionFailureReason)
-      ? { decryptionFailureReason: (event as any).decryptionFailureReason } : {}),
-  };
-}
-
-/**
- * Handle an m.replace (edit) event. Tries to update the original message
- * in-place if it's still in the queue. If already consumed, enqueues a new
- * message with editedOriginalEventId set.
- */
-function handleEditEvent(
-  event: MatrixEvent,
-  ownUserId: string | null,
-  dmRoomIds: Set<string>,
-  client: MatrixClient,
-  queue: ReturnType<typeof getMessageQueue>,
-): void {
-  if (event.getSender() === ownUserId) return;
-
-  const content = event.getClearContent?.() || event.getContent();
-  const relatesTo = content?.["m.relates_to"];
-  if (relatesTo?.rel_type !== "m.replace") return;
-
-  const originalEventId = relatesTo.event_id as string | undefined;
-  if (!originalEventId) return;
-
-  const newContent = content["m.new_content"];
-  const newBody = String(newContent?.body || "");
-  if (!newBody) return;
-
-  const editResult = queue.tryEditInPlace(originalEventId, newBody);
-
-  if (editResult === "fetched") {
-    // Original already consumed — enqueue as a new edit message
-    const eid = event.getId();
-    if (!eid) return;
-    const evtRoomId = event.getRoomId() || "";
-    const room = client.getRoom(evtRoomId);
-
-    queue.enqueueMessage({
-      eventId: eid,
-      roomId: evtRoomId,
-      roomName: room?.name || evtRoomId,
-      sender: event.getSender() || "",
-      body: newBody,
-      timestamp: event.getTs(),
-      isDM: dmRoomIds.has(evtRoomId),
-      editedOriginalEventId: originalEventId,
-    });
-  }
-  // "in-place" — already updated, nothing more to do
-  // "not-found" — original was never queued (e.g. own message), skip
-}
 
 /**
  * Start the auto-sync loop. Creates a persistent Matrix client and registers
