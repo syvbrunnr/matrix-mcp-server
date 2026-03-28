@@ -85,6 +85,19 @@ describe("buildDmRoomSet", () => {
     expect(set.has("!public:ex.com")).toBe(false);
   });
 
+  it("handles non-array values in m.direct gracefully", () => {
+    const client = mockClient({
+      accountData: {
+        "@bob:ex.com": ["!dm1:ex.com"],
+        "@broken:ex.com": "not-an-array" as any,
+        "@also-broken:ex.com": null as any,
+      } as any,
+    });
+    const set = buildDmRoomSet(client);
+    expect(set.has("!dm1:ex.com")).toBe(true);
+    expect(set.size).toBe(1);
+  });
+
   it("returns empty set for client with no rooms or account data", () => {
     const client = mockClient();
     const set = buildDmRoomSet(client);
@@ -149,6 +162,26 @@ describe("extractQueuedMessage", () => {
     const msg = extractQueuedMessage(event, "@mimir:ex.com", dmRoomIds, client);
     expect(msg).not.toBeNull();
     expect(msg!.threadRootEventId).toBe("$thread1");
+  });
+
+  it("extracts reply_to event ID", () => {
+    const client = mockClient({ rooms: [{ roomId: "!room:ex.com", name: "Room", joinedMembers: 5 }] });
+    const event = mockEvent({
+      roomId: "!room:ex.com",
+      relatesTo: { "m.in_reply_to": { event_id: "$replied" } },
+    });
+    const msg = extractQueuedMessage(event, "@mimir:ex.com", dmRoomIds, client);
+    expect(msg).not.toBeNull();
+    expect(msg!.replyToEventId).toBe("$replied");
+  });
+
+  it("returns null when event has no ID", () => {
+    const client = mockClient({ rooms: [{ roomId: "!room:ex.com", name: "Room", joinedMembers: 5 }] });
+    const event = mockEvent({ id: undefined as any });
+    // Override getId to return null
+    event.getId = () => null;
+    const msg = extractQueuedMessage(event, "@mimir:ex.com", dmRoomIds, client);
+    expect(msg).toBeNull();
   });
 
   it("handles encrypted messages with no body", () => {
@@ -248,6 +281,25 @@ describe("scheduleDecryptionRetries", () => {
     // Need to flush promises for async setTimeout callbacks
     return Promise.resolve().then(() => {
       expect(queue.updateDecryptedBody).toHaveBeenCalledWith("$enc3", "decrypted message");
+    });
+  });
+
+  it("does not count '[encrypted]' body as successful decryption", () => {
+    // After attemptDecryption, if body is still "[encrypted]", should NOT call updateDecryptedBody
+    let callCount = 0;
+    const event: any = {
+      once: () => {},
+      getClearContent: () => null,
+      getContent: () => ({ body: "[encrypted]" }),
+      attemptDecryption: async () => {},
+    };
+    const queue = { updateDecryptedBody: jest.fn() };
+    const client = mockCryptoClient();
+    scheduleDecryptionRetries(event, "$enc6", client, queue as any);
+
+    jest.advanceTimersByTime(2000);
+    return Promise.resolve().then(() => {
+      expect(queue.updateDecryptedBody).not.toHaveBeenCalled();
     });
   });
 
@@ -356,6 +408,14 @@ describe("handleEditEvent", () => {
         isDM: true,
       }),
     );
+  });
+
+  it("skips edit with empty new body", () => {
+    const event = mockEditEvent({ newBody: "" });
+    const queue = mockEditQueue("in-place");
+    const client = mockClient();
+    handleEditEvent(event as any, "@mimir:ex.com", new Set(), client, queue);
+    expect(queue.tryEditInPlace).not.toHaveBeenCalled();
   });
 
   it("does nothing when original was not found", () => {
