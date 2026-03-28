@@ -170,7 +170,8 @@ export async function startAutoSync(): Promise<void> {
         increment("messagesDeduplicated");
       }
 
-      // For encrypted messages, listen for decryption to update body in the queue DB
+      // For encrypted messages, listen for decryption to update body in the queue DB.
+      // Also schedule retry attempts — Dendrite sometimes delivers room keys late.
       if (enqueued && msg.decryptionFailed) {
         event.once(MatrixEventEvent.Decrypted, () => {
           try {
@@ -182,6 +183,29 @@ export async function startAutoSync(): Promise<void> {
             console.error(`[autoSync] Decryption update failed for ${msg.eventId}: ${decErr.message}`);
           }
         });
+
+        // Retry decryption after delays — room keys may arrive via key backup or to-device messages
+        const retryDelays = [2000, 5000, 15000]; // 2s, 5s, 15s
+        for (const delay of retryDelays) {
+          setTimeout(async () => {
+            try {
+              const crypto = client.getCrypto?.();
+              if (!crypto) return;
+              // Check if already decrypted (event listener may have fired)
+              const currentContent = event.getClearContent?.();
+              if (currentContent?.body) return; // Already decrypted
+              // Attempt decryption again — SDK may have received keys since initial failure
+              await (event as any).attemptDecryption(crypto);
+              const retryContent = event.getClearContent?.() || event.getContent();
+              if (retryContent?.body && retryContent.body !== "[encrypted]") {
+                queue.updateDecryptedBody(msg.eventId, String(retryContent.body));
+                console.error(`[autoSync] Decryption retry succeeded for ${msg.eventId} after ${delay}ms`);
+              }
+            } catch {
+              // Silent — retries are best-effort
+            }
+          }, delay);
+        }
       }
     } catch (err: any) {
       increment("listenerErrors");
@@ -213,6 +237,27 @@ export async function startAutoSync(): Promise<void> {
                 console.error(`[autoSync] Decryption update failed for ${msg.eventId}: ${decErr.message}`);
               }
             });
+
+            // Retry decryption after delays (same as main timeline handler)
+            const retryDelays = [2000, 5000, 15000];
+            for (const delay of retryDelays) {
+              setTimeout(async () => {
+                try {
+                  const crypto = client.getCrypto?.();
+                  if (!crypto) return;
+                  const currentContent = event.getClearContent?.();
+                  if (currentContent?.body) return;
+                  await (event as any).attemptDecryption(crypto);
+                  const retryContent = event.getClearContent?.() || event.getContent();
+                  if (retryContent?.body && retryContent.body !== "[encrypted]") {
+                    queue.updateDecryptedBody(msg.eventId, String(retryContent.body));
+                    console.error(`[autoSync] Thread decryption retry succeeded for ${msg.eventId} after ${delay}ms`);
+                  }
+                } catch {
+                  // Silent
+                }
+              }, delay);
+            }
           }
         }
       } catch (err: any) {
