@@ -209,6 +209,7 @@ describe("scheduleDecryptionRetries", () => {
   });
 
   afterEach(() => {
+    jest.clearAllTimers();
     jest.useRealTimers();
   });
 
