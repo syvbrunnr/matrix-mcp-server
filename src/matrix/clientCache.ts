@@ -100,14 +100,13 @@ export function getCachedClient(userId: string, homeserverUrl: string): MatrixCl
   // RECONNECTING, null), evict it so the caller gets a fresh one. This prevents stale
   // clients from returning null for getRoom() while getRooms() still works from the
   // local store. wait-for-messages already had this check; now all tools benefit.
+  // NOTE: Do NOT call stopClient() here — the evicted client may be the autoSync
+  // client which still holds event listeners. stopClient() kills the crypto backend
+  // permanently (cryptoBackend.stop() is irreversible). Just remove from cache and
+  // let the caller create a fresh client. autoSync manages its own client lifecycle.
   const syncState = cached.client.getSyncState();
   if (syncState && syncState !== "SYNCING" && syncState !== "PREPARED") {
-    console.error(`Cached client sync unhealthy (${syncState}) for ${userId}, evicting`);
-    try {
-      cached.client.stopClient();
-    } catch (error) {
-      console.warn(`Error stopping unhealthy client: ${error}`);
-    }
+    console.error(`Cached client sync unhealthy (${syncState}) for ${userId}, evicting from cache (not stopping)`);
     clientCache.delete(key);
     return null;
   }
@@ -144,6 +143,19 @@ export function cacheClient(client: MatrixClient, userId: string, homeserverUrl:
   });
   
   console.error(`Cached Matrix client for ${userId}`);
+}
+
+/**
+ * Touch the cache entry to prevent expiry without health checks.
+ * Used by autoSync keepalive — must NEVER call stopClient() because
+ * killing the crypto backend is irreversible and breaks E2EE permanently.
+ */
+export function touchCachedClient(userId: string, homeserverUrl: string): void {
+  const key = getCacheKey(userId, homeserverUrl);
+  const cached = clientCache.get(key);
+  if (cached) {
+    cached.lastAccessed = Date.now();
+  }
 }
 
 /**

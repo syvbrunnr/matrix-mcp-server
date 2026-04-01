@@ -11,7 +11,7 @@
 import { RoomEvent, MatrixEvent, EventType, ClientEvent, MatrixClient, ThreadEvent } from "matrix-js-sdk";
 import { createConfiguredMatrixClient, getAccessToken, getMatrixContext } from "../utils/server-helpers.js";
 import { getMessageQueue, QueuedMessage } from "./messageQueue.js";
-import { getCachedClient } from "./clientCache.js";
+import { touchCachedClient } from "./clientCache.js";
 import { readFileSync } from "fs";
 import path from "path";
 import { increment, getMetrics, resetStalenessBaseline } from "./pipelineMetrics.js";
@@ -233,7 +233,10 @@ export async function startAutoSync(): Promise<void> {
 
   // --- Maintenance intervals ---
   keepAliveHandle = setInterval(async () => {
-    getCachedClient(matrixUserId, homeserverUrl);
+    // Touch cache to prevent expiry. NEVER use getCachedClient() here — its sync
+    // health check calls stopClient() which permanently kills the crypto backend.
+    // autoSync owns this client's lifecycle; cache eviction must not interfere.
+    touchCachedClient(matrixUserId, homeserverUrl);
     const token = client.store.getSyncToken();
     if (token) queue.setSyncToken(token);
     dmRoomIds = buildDmRoomSet(client);
