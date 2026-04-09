@@ -455,6 +455,12 @@ export const sendImageHandler = async (
 
     let thumbnailFile: EncryptedFile | null = null;
 
+    // Element Web skips thumbnail generation entirely for files under ~32KB.
+    // For tiny images (icons, QR codes) an extra thumbnail is unnecessary and
+    // may confuse strict clients that expect thumbnails only for large media.
+    const SKIP_THUMBNAIL_BELOW = 32 * 1024;
+    const shouldEmitThumbnail = buffer.length >= SKIP_THUMBNAIL_BELOW;
+
     if (isEncryptedRoom) {
       const { ciphertext, file } = encryptAttachment(buffer);
       // Upload the ciphertext as application/octet-stream — Matrix content repo
@@ -469,23 +475,21 @@ export const sendImageHandler = async (
       mxcUrl = uploadResponse.content_uri;
       encryptedFile = file;
 
-      // Element Desktop requires info.thumbnail_file to render inline previews
-      // in encrypted rooms (mobile Element is lenient and falls back to the
-      // main file). Without a proper image library to generate a real
-      // downscaled thumbnail, we re-encrypt the original buffer with a fresh
-      // key and upload it as the thumbnail. For small images (QR codes, icons)
-      // this is correct behavior; for larger photos this wastes bandwidth but
-      // is functionally fine until sharp/jimp is added.
-      const thumbEncrypted = encryptAttachment(buffer);
-      const thumbUpload = await client.uploadContent(thumbEncrypted.ciphertext as any, {
-        type: "application/octet-stream",
-        name: `thumb-${effectiveFilename}`,
-      });
-      thumbnailFile = {
-        ...thumbEncrypted.file,
-        url: thumbUpload.content_uri,
-        mimetype: effectiveMime,
-      };
+      // For larger images, generate a thumbnail entry. Without a real image
+      // library (sharp/jimp) we re-encrypt the full buffer as the thumbnail.
+      // Skipped for small images per Element Web's convention.
+      if (shouldEmitThumbnail) {
+        const thumbEncrypted = encryptAttachment(buffer);
+        const thumbUpload = await client.uploadContent(thumbEncrypted.ciphertext as any, {
+          type: "application/octet-stream",
+          name: `thumb-${effectiveFilename}`,
+        });
+        thumbnailFile = {
+          ...thumbEncrypted.file,
+          url: thumbUpload.content_uri,
+          mimetype: effectiveMime,
+        };
+      }
     } else {
       const uploadResponse = await client.uploadContent(buffer, {
         type: effectiveMime,

@@ -175,7 +175,7 @@ describe("sendImageHandler", () => {
     expect(client.sendMessage).toHaveBeenCalled();
   });
 
-  it("sends an encrypted image in an E2EE room (file + thumbnail_file + key material)", async () => {
+  it("sends an encrypted small image in an E2EE room WITHOUT thumbnail (<32KB)", async () => {
     const room = mockRoom({ encrypted: true });
     const client = mockClient(room);
     mockCreateClient.mockResolvedValue(client as any);
@@ -188,13 +188,11 @@ describe("sendImageHandler", () => {
       reqContext
     );
     expect(result.isError).toBeUndefined();
-    // uploadContent is called twice: once for main file, once for thumbnail.
-    expect((client.uploadContent as jest.Mock).mock.calls.length).toBe(2);
+    // Small images get a single upload (no thumbnail), matching Element Web's
+    // behavior of skipping thumbnails for files under ~32KB.
+    expect((client.uploadContent as jest.Mock).mock.calls.length).toBe(1);
     const mainUpload = (client.uploadContent as jest.Mock).mock.calls[0];
     expect(mainUpload[1].type).toBe("application/octet-stream");
-    const thumbUpload = (client.uploadContent as jest.Mock).mock.calls[1];
-    expect(thumbUpload[1].type).toBe("application/octet-stream");
-    expect(thumbUpload[1].name).toContain("thumb");
 
     const sendCall = (client.sendMessage as jest.Mock).mock.calls[0];
     const content = sendCall[1];
@@ -211,19 +209,10 @@ describe("sendImageHandler", () => {
     // info should carry width/height from PNG header.
     expect(content.info.w).toBe(1);
     expect(content.info.h).toBe(1);
-    // info.thumbnail_file is required by Element Desktop for inline rendering
-    // in encrypted rooms.
-    expect(content.info.thumbnail_file).toBeDefined();
-    expect(content.info.thumbnail_file.v).toBe("v2");
-    expect(content.info.thumbnail_file.url).toBe("mxc://example.com/abc");
-    expect(content.info.thumbnail_file.key.alg).toBe("A256CTR");
-    expect(content.info.thumbnail_file.mimetype).toBe("image/png");
-    // Thumbnail has its own fresh IV (distinct from main file IV).
-    expect(content.info.thumbnail_file.iv).not.toBe(content.file.iv);
-    expect(content.info.thumbnail_info).toBeDefined();
-    expect(content.info.thumbnail_info.w).toBe(1);
-    expect(content.info.thumbnail_info.h).toBe(1);
-    expect(content.info.thumbnail_info.mimetype).toBe("image/png");
+    // Tiny image: no thumbnail fields.
+    expect(content.info.thumbnail_file).toBeUndefined();
+    expect(content.info.thumbnail_url).toBeUndefined();
+    expect(content.info.thumbnail_info).toBeUndefined();
   });
 
   it("returns error when room not found", async () => {
