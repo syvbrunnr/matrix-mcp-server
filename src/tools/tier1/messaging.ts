@@ -1,23 +1,15 @@
 import { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
-import { createCipheriv, createHash, randomBytes } from "crypto";
+import { encryptAttachment as meaEncryptAttachment } from "matrix-encrypt-attachment";
 import { createConfiguredMatrixClient, getAccessToken, getMatrixContext } from "../../utils/server-helpers.js";
 import { removeClientFromCache } from "../../matrix/client.js";
 import { shouldEvictClientCache, getDiagnosticHint } from "../../utils/matrix-errors.js";
 import { resolveThreadRoot, buildRelatesTo } from "../../utils/threading.js";
 import { ToolRegistrationFunction } from "../../types/tool-types.js";
 
-/** Encode Buffer as unpadded base64url (for JWK key.k). */
-function base64UrlEncode(buf: Buffer): string {
-  return buf.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-}
-
-/** Encode Buffer as unpadded standard base64 (for Matrix EncryptedFile iv and hashes). */
-function base64Unpadded(buf: Buffer): string {
-  return buf.toString("base64").replace(/=+$/, "");
-}
-
-/** Matrix EncryptedFile format (MSC3246 / matrix spec v1.8). */
+/** Matrix EncryptedFile format (MSC3246 / matrix spec v1.8).
+ *  Mirrors the structure from matrix-encrypt-attachment but exported here
+ *  for convenience. */
 interface EncryptedFile {
   v: "v2";
   url: string;
@@ -33,41 +25,21 @@ interface EncryptedFile {
   mimetype?: string;
 }
 
-/** Encrypt an attachment buffer for upload to an E2EE room.
- *  Returns { ciphertext, file } where file contains key material and hashes.
- *  Uses AES-256-CTR per Matrix spec. The counter starts at 0; Matrix spec
- *  requires the high 64 bits of the IV to be the nonce and the low 64 bits
- *  to be the counter (which starts at 0).
- */
-function encryptAttachment(plaintext: Buffer): {
+/** Encrypt an attachment buffer via the official matrix-encrypt-attachment
+ *  library. Matches Element Web's exact encryption path so any protocol-level
+ *  issue is isolated from our crypto correctness. */
+async function encryptAttachment(plaintext: Buffer): Promise<{
   ciphertext: Buffer;
   file: Omit<EncryptedFile, "url" | "mimetype">;
-} {
-  const keyBytes = randomBytes(32); // AES-256 key
-  // Matrix spec: IV is 16 bytes; the low 8 bytes are the counter (start at 0).
-  // Generate 8 random bytes for the high nonce, zero the counter half.
-  const ivBytes = Buffer.alloc(16);
-  randomBytes(8).copy(ivBytes, 0);
-  // Bytes 8..15 remain zero (counter starts at 0).
-
-  const cipher = createCipheriv("aes-256-ctr", keyBytes, ivBytes);
-  const ciphertext = Buffer.concat([cipher.update(plaintext), cipher.final()]);
-  const sha256 = createHash("sha256").update(ciphertext).digest();
-
+}> {
+  // Copy into a fresh ArrayBuffer to satisfy the stricter matrix-encrypt-attachment
+  // type signature (it expects ArrayBuffer, not ArrayBufferLike).
+  const arrayBuffer = new ArrayBuffer(plaintext.byteLength);
+  new Uint8Array(arrayBuffer).set(plaintext);
+  const result = await meaEncryptAttachment(arrayBuffer);
   return {
-    ciphertext,
-    file: {
-      v: "v2",
-      key: {
-        kty: "oct",
-        alg: "A256CTR",
-        ext: true,
-        k: base64UrlEncode(keyBytes), // JWK: url-safe unpadded
-        key_ops: ["encrypt", "decrypt"],
-      },
-      iv: base64Unpadded(ivBytes), // Matrix spec: standard unpadded base64
-      hashes: { sha256: base64Unpadded(sha256) }, // Matrix spec: standard unpadded base64
-    },
+    ciphertext: Buffer.from(result.data),
+    file: result.info as Omit<EncryptedFile, "url" | "mimetype">,
   };
 }
 
@@ -462,7 +434,7 @@ export const sendImageHandler = async (
     const shouldEmitThumbnail = buffer.length >= SKIP_THUMBNAIL_BELOW;
 
     if (isEncryptedRoom) {
-      const { ciphertext, file } = encryptAttachment(buffer);
+      const { ciphertext, file } = await encryptAttachment(buffer);
       // Upload the ciphertext as application/octet-stream. Element Web also
       // passes includeFilename: false for encrypted uploads — the filename
       // shouldn't leak as metadata on the ciphertext URL (it's already in the
@@ -480,7 +452,7 @@ export const sendImageHandler = async (
       // library (sharp/jimp) we re-encrypt the full buffer as the thumbnail.
       // Skipped for small images per Element Web's convention.
       if (shouldEmitThumbnail) {
-        const thumbEncrypted = encryptAttachment(buffer);
+        const thumbEncrypted = await encryptAttachment(buffer);
         const thumbUpload = await client.uploadContent(thumbEncrypted.ciphertext as any, {
           type: "application/octet-stream",
           includeFilename: false,
