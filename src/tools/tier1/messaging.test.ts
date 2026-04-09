@@ -196,6 +196,10 @@ describe("sendImageHandler", () => {
 
     const sendCall = (client.sendMessage as jest.Mock).mock.calls[0];
     const content = sendCall[1];
+    // content.filename must be set explicitly so Element Web's
+    // validateImageOrVideoMimetype() gate accepts the event as an image
+    // (even when body is a descriptive caption).
+    expect(content.filename).toBe("image.png");
     // Encrypted rooms use content.file with key material, not content.url.
     expect(content.url).toBeUndefined();
     expect(content.file).toBeDefined();
