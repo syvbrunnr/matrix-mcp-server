@@ -498,8 +498,15 @@ export const sendImageHandler = async (
     // Element Web uses filename as body (not a description). This matches
     // the standard m.image body convention and helps clients identify it
     // as a renderable image vs a generic file attachment.
+    // Element Web v1.11.85+ runs validateImageOrVideoMimetype() on every
+    // m.image event and downgrades to MFileBody ("download attachment") when
+    // `content.filename ?? content.body` has no recognised image extension.
+    // Descriptive bodies like "Nordnet QR code" fail this gate.
+    // Fix: always set `filename` explicitly. `body` becomes the caption per
+    // MSC2530/MSC4231.
     const content: Record<string, any> = {
       msgtype: "m.image",
+      filename: effectiveFilename,
       body: body || effectiveFilename,
       info,
     };
