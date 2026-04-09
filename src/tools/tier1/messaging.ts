@@ -463,14 +463,15 @@ export const sendImageHandler = async (
 
     if (isEncryptedRoom) {
       const { ciphertext, file } = encryptAttachment(buffer);
-      // Upload the ciphertext as application/octet-stream — Matrix content repo
-      // should not treat it as a renderable image type.
-      // Cast to any because matrix-js-sdk's FileType uses browser DOM types
-      // (XMLHttpRequestBodyInit) which don't formally include Node Buffer, but
-      // the SDK handles Buffer correctly at runtime (same as the plaintext path).
+      // Upload the ciphertext as application/octet-stream. Element Web also
+      // passes includeFilename: false for encrypted uploads — the filename
+      // shouldn't leak as metadata on the ciphertext URL (it's already in the
+      // encrypted event). Cast to any because matrix-js-sdk's FileType uses
+      // browser DOM types (XMLHttpRequestBodyInit) which don't formally
+      // include Node Buffer, but the SDK handles Buffer correctly at runtime.
       const uploadResponse = await client.uploadContent(ciphertext as any, {
         type: "application/octet-stream",
-        name: effectiveFilename,
+        includeFilename: false,
       });
       mxcUrl = uploadResponse.content_uri;
       encryptedFile = file;
@@ -482,7 +483,7 @@ export const sendImageHandler = async (
         const thumbEncrypted = encryptAttachment(buffer);
         const thumbUpload = await client.uploadContent(thumbEncrypted.ciphertext as any, {
           type: "application/octet-stream",
-          name: `thumb-${effectiveFilename}`,
+          includeFilename: false,
         });
         thumbnailFile = {
           ...thumbEncrypted.file,
