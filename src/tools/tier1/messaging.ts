@@ -508,12 +508,19 @@ export const sendImageHandler = async (
     }
     if (thumbnailFile) {
       info.thumbnail_file = thumbnailFile;
+      // Element Web also sets thumbnail_url to the thumbnail's MXC URL even
+      // for encrypted rooms (for legacy client compatibility). Element Desktop
+      // appears to require thumbnail_url OR special handling without it.
+      info.thumbnail_url = thumbnailFile.url;
       info.thumbnail_info = {
         mimetype: effectiveMime,
         size: buffer.length,
         ...(dims ? { w: dims.w, h: dims.h } : {}),
       };
     }
+    // Element Web uses filename as body (not a description). This matches
+    // the standard m.image body convention and helps clients identify it
+    // as a renderable image vs a generic file attachment.
     const content: Record<string, any> = {
       msgtype: "m.image",
       body: body || effectiveFilename,
@@ -532,7 +539,10 @@ export const sendImageHandler = async (
       content["m.relates_to"] = relatesTo;
     }
 
-    const response = await client.sendEvent(roomId, "m.room.message" as any, content as any);
+    // Use sendMessage (Element Web's approach) instead of sendEvent. It takes
+    // the same content object but ensures the event goes through the standard
+    // message send pipeline, which handles E2EE encryption consistently.
+    const response = await client.sendMessage(roomId, content as any);
 
     return {
       content: [{

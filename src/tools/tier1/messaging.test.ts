@@ -61,6 +61,7 @@ function mockClient(room: any, overrides: Record<string, any> = {}) {
     sendHtmlMessage: jest.fn<any>().mockResolvedValue({ event_id: "$sent2" }),
     sendEmoteMessage: jest.fn<any>().mockResolvedValue({ event_id: "$sent3" }),
     sendEvent: jest.fn<any>().mockResolvedValue({ event_id: "$sent4" }),
+    sendMessage: jest.fn<any>().mockResolvedValue({ event_id: "$sent5" }),
     uploadContent: jest.fn<any>().mockResolvedValue({ content_uri: "mxc://example.com/abc" }),
     ...overrides,
   };
@@ -171,7 +172,7 @@ describe("sendImageHandler", () => {
     expect(result.content[0].text).toContain("Image sent successfully");
     expect(result.content[0].text).toContain("mxc://example.com/abc");
     expect(client.uploadContent).toHaveBeenCalled();
-    expect(client.sendEvent).toHaveBeenCalled();
+    expect(client.sendMessage).toHaveBeenCalled();
   });
 
   it("sends an encrypted image in an E2EE room (file + thumbnail_file + key material)", async () => {
@@ -195,8 +196,8 @@ describe("sendImageHandler", () => {
     expect(thumbUpload[1].type).toBe("application/octet-stream");
     expect(thumbUpload[1].name).toContain("thumb");
 
-    const sendCall = (client.sendEvent as jest.Mock).mock.calls[0];
-    const content = sendCall[2];
+    const sendCall = (client.sendMessage as jest.Mock).mock.calls[0];
+    const content = sendCall[1];
     // Encrypted rooms use content.file with key material, not content.url.
     expect(content.url).toBeUndefined();
     expect(content.file).toBeDefined();
