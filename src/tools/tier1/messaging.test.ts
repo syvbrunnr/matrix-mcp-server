@@ -31,7 +31,7 @@ const { sendMessageHandler, sendImageHandler } = await import("./messaging.js");
 const mockCreateClient = createConfiguredMatrixClient as jest.MockedFunction<typeof createConfiguredMatrixClient>;
 const reqContext = { requestInfo: { headers: {} }, authInfo: { token: "tok" } };
 
-function mockRoom(opts: { name?: string; memberCount?: number; userPowerLevel?: number; requiredLevel?: number } = {}) {
+function mockRoom(opts: { name?: string; memberCount?: number; userPowerLevel?: number; requiredLevel?: number; encrypted?: boolean } = {}) {
   return {
     name: opts.name ?? "Test Room",
     roomId: "!room:ex.com",
@@ -50,6 +50,7 @@ function mockRoom(opts: { name?: string; memberCount?: number; userPowerLevel?: 
       },
     },
     findEventById: () => null,
+    hasEncryptionStateEvent: () => opts.encrypted ?? false,
   };
 }
 
@@ -171,6 +172,40 @@ describe("sendImageHandler", () => {
     expect(result.content[0].text).toContain("mxc://example.com/abc");
     expect(client.uploadContent).toHaveBeenCalled();
     expect(client.sendEvent).toHaveBeenCalled();
+  });
+
+  it("sends an encrypted image in an E2EE room (file + key material)", async () => {
+    const room = mockRoom({ encrypted: true });
+    const client = mockClient(room);
+    mockCreateClient.mockResolvedValue(client as any);
+
+    // Small 1x1 pixel PNG in base64
+    const tinyPng = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+
+    const result = await sendImageHandler(
+      { roomId: "!room:ex.com", imageBase64: tinyPng },
+      reqContext
+    );
+    expect(result.isError).toBeUndefined();
+    expect(client.uploadContent).toHaveBeenCalled();
+    const uploadCall = (client.uploadContent as jest.Mock).mock.calls[0];
+    expect(uploadCall[1].type).toBe("application/octet-stream");
+
+    const sendCall = (client.sendEvent as jest.Mock).mock.calls[0];
+    const content = sendCall[2];
+    // Encrypted rooms use content.file with key material, not content.url.
+    expect(content.url).toBeUndefined();
+    expect(content.file).toBeDefined();
+    expect(content.file.v).toBe("v2");
+    expect(content.file.url).toBe("mxc://example.com/abc");
+    expect(content.file.key.alg).toBe("A256CTR");
+    expect(content.file.key.k).toBeDefined();
+    expect(content.file.iv).toBeDefined();
+    expect(content.file.hashes.sha256).toBeDefined();
+    expect(content.file.mimetype).toBe("image/png");
+    // info should still carry width/height from PNG header.
+    expect(content.info.w).toBe(1);
+    expect(content.info.h).toBe(1);
   });
 
   it("returns error when room not found", async () => {

@@ -1,10 +1,157 @@
 import { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
+import { createCipheriv, createHash, randomBytes } from "crypto";
 import { createConfiguredMatrixClient, getAccessToken, getMatrixContext } from "../../utils/server-helpers.js";
 import { removeClientFromCache } from "../../matrix/client.js";
 import { shouldEvictClientCache, getDiagnosticHint } from "../../utils/matrix-errors.js";
 import { resolveThreadRoot, buildRelatesTo } from "../../utils/threading.js";
 import { ToolRegistrationFunction } from "../../types/tool-types.js";
+
+/** Encode Buffer as unpadded base64url (for JWK key.k). */
+function base64UrlEncode(buf: Buffer): string {
+  return buf.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+/** Encode Buffer as unpadded standard base64 (for Matrix EncryptedFile iv and hashes). */
+function base64Unpadded(buf: Buffer): string {
+  return buf.toString("base64").replace(/=+$/, "");
+}
+
+/** Matrix EncryptedFile format (MSC3246 / matrix spec v1.8). */
+interface EncryptedFile {
+  v: "v2";
+  url: string;
+  key: {
+    kty: "oct";
+    alg: "A256CTR";
+    ext: true;
+    k: string;
+    key_ops: string[];
+  };
+  iv: string;
+  hashes: { sha256: string };
+  mimetype?: string;
+}
+
+/** Encrypt an attachment buffer for upload to an E2EE room.
+ *  Returns { ciphertext, file } where file contains key material and hashes.
+ *  Uses AES-256-CTR per Matrix spec. The counter starts at 0; Matrix spec
+ *  requires the high 64 bits of the IV to be the nonce and the low 64 bits
+ *  to be the counter (which starts at 0).
+ */
+function encryptAttachment(plaintext: Buffer): {
+  ciphertext: Buffer;
+  file: Omit<EncryptedFile, "url" | "mimetype">;
+} {
+  const keyBytes = randomBytes(32); // AES-256 key
+  // Matrix spec: IV is 16 bytes; the low 8 bytes are the counter (start at 0).
+  // Generate 8 random bytes for the high nonce, zero the counter half.
+  const ivBytes = Buffer.alloc(16);
+  randomBytes(8).copy(ivBytes, 0);
+  // Bytes 8..15 remain zero (counter starts at 0).
+
+  const cipher = createCipheriv("aes-256-ctr", keyBytes, ivBytes);
+  const ciphertext = Buffer.concat([cipher.update(plaintext), cipher.final()]);
+  const sha256 = createHash("sha256").update(ciphertext).digest();
+
+  return {
+    ciphertext,
+    file: {
+      v: "v2",
+      key: {
+        kty: "oct",
+        alg: "A256CTR",
+        ext: true,
+        k: base64UrlEncode(keyBytes), // JWK: url-safe unpadded
+        key_ops: ["encrypt", "decrypt"],
+      },
+      iv: base64Unpadded(ivBytes), // Matrix spec: standard unpadded base64
+      hashes: { sha256: base64Unpadded(sha256) }, // Matrix spec: standard unpadded base64
+    },
+  };
+}
+
+/** Extract image dimensions (width, height) from image buffer.
+ *  Supports PNG, JPEG, GIF, and WebP. Returns null if format unknown or buffer too small.
+ *  Element Desktop requires info.w/info.h for inline preview rendering.
+ */
+function getImageDimensions(buffer: Buffer): { w: number; h: number } | null {
+  if (buffer.length < 24) return null;
+
+  // PNG: 8-byte signature + IHDR chunk with w/h at offset 16/20 (big-endian u32).
+  if (
+    buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4e && buffer[3] === 0x47 &&
+    buffer[4] === 0x0d && buffer[5] === 0x0a && buffer[6] === 0x1a && buffer[7] === 0x0a
+  ) {
+    return {
+      w: buffer.readUInt32BE(16),
+      h: buffer.readUInt32BE(20),
+    };
+  }
+
+  // GIF: "GIF87a" or "GIF89a" + w/h at offset 6/8 (little-endian u16).
+  if (buffer[0] === 0x47 && buffer[1] === 0x49 && buffer[2] === 0x46) {
+    return {
+      w: buffer.readUInt16LE(6),
+      h: buffer.readUInt16LE(8),
+    };
+  }
+
+  // JPEG: starts with 0xFFD8, scan for SOF0/SOF2 marker (0xFFC0/0xFFC2).
+  if (buffer[0] === 0xff && buffer[1] === 0xd8) {
+    let offset = 2;
+    while (offset < buffer.length - 9) {
+      if (buffer[offset] !== 0xff) break;
+      const marker = buffer[offset + 1];
+      const segmentLen = buffer.readUInt16BE(offset + 2);
+      // SOF markers: C0-CF except C4 (DHT), C8 (JPG), CC (DAC)
+      if (
+        (marker >= 0xc0 && marker <= 0xcf) &&
+        marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc
+      ) {
+        return {
+          h: buffer.readUInt16BE(offset + 5),
+          w: buffer.readUInt16BE(offset + 7),
+        };
+      }
+      offset += 2 + segmentLen;
+    }
+  }
+
+  // WebP: "RIFF" + 4 bytes + "WEBP". VP8/VP8L/VP8X chunks carry the dimensions.
+  if (
+    buffer[0] === 0x52 && buffer[1] === 0x49 && buffer[2] === 0x46 && buffer[3] === 0x46 &&
+    buffer[8] === 0x57 && buffer[9] === 0x45 && buffer[10] === 0x42 && buffer[11] === 0x50
+  ) {
+    const chunkType = buffer.slice(12, 16).toString("ascii");
+    if (chunkType === "VP8L" && buffer.length >= 30) {
+      // VP8L: 1-byte signature then 14 bits width-1, 14 bits height-1.
+      const b0 = buffer[21];
+      const b1 = buffer[22];
+      const b2 = buffer[23];
+      const b3 = buffer[24];
+      return {
+        w: (((b1 & 0x3f) << 8) | b0) + 1,
+        h: (((b3 & 0x0f) << 10) | (b2 << 2) | ((b1 & 0xc0) >> 6)) + 1,
+      };
+    }
+    if (chunkType === "VP8X" && buffer.length >= 30) {
+      // VP8X: 4-byte flags then 3-byte (w-1) then 3-byte (h-1), little-endian.
+      const w = 1 + (buffer[24] | (buffer[25] << 8) | (buffer[26] << 16));
+      const h = 1 + (buffer[27] | (buffer[28] << 8) | (buffer[29] << 16));
+      return { w, h };
+    }
+    if (chunkType === "VP8 " && buffer.length >= 30) {
+      // VP8 lossy: frame tag at offset 20, dimensions at offset 26.
+      return {
+        w: buffer.readUInt16LE(26) & 0x3fff,
+        h: buffer.readUInt16LE(28) & 0x3fff,
+      };
+    }
+  }
+
+  return null;
+}
 
 /** Strip HTML tags to produce a plaintext fallback body for Matrix messages. */
 function stripHtml(html: string): string {
@@ -299,24 +446,57 @@ export const sendImageHandler = async (
     const effectiveMime = mimeType || "image/png";
     const effectiveFilename = filename || "image.png";
 
-    // Upload to Matrix content repository.
-    const uploadResponse = await client.uploadContent(buffer, {
-      type: effectiveMime,
-      name: effectiveFilename,
-    });
+    // For E2EE rooms, media must also be encrypted. Element Desktop refuses
+    // to render plaintext media URLs in encrypted rooms (info-leak protection).
+    const isEncryptedRoom = room.hasEncryptionStateEvent();
 
-    const mxcUrl = uploadResponse.content_uri;
+    let mxcUrl: string;
+    let encryptedFile: Omit<EncryptedFile, "url" | "mimetype"> | null = null;
+
+    if (isEncryptedRoom) {
+      const { ciphertext, file } = encryptAttachment(buffer);
+      // Upload the ciphertext as application/octet-stream — Matrix content repo
+      // should not treat it as a renderable image type.
+      // Cast to any because matrix-js-sdk's FileType uses browser DOM types
+      // (XMLHttpRequestBodyInit) which don't formally include Node Buffer, but
+      // the SDK handles Buffer correctly at runtime (same as the plaintext path).
+      const uploadResponse = await client.uploadContent(ciphertext as any, {
+        type: "application/octet-stream",
+        name: effectiveFilename,
+      });
+      mxcUrl = uploadResponse.content_uri;
+      encryptedFile = file;
+    } else {
+      const uploadResponse = await client.uploadContent(buffer, {
+        type: effectiveMime,
+        name: effectiveFilename,
+      });
+      mxcUrl = uploadResponse.content_uri;
+    }
 
     // Build m.image event content.
+    const info: Record<string, any> = {
+      mimetype: effectiveMime,
+      size: buffer.length,
+    };
+    // Element Desktop requires w/h in info to render inline preview.
+    // Auto-detect from common image formats (PNG, JPEG, GIF, WebP).
+    const dims = getImageDimensions(buffer);
+    if (dims) {
+      info.w = dims.w;
+      info.h = dims.h;
+    }
     const content: Record<string, any> = {
       msgtype: "m.image",
       body: body || effectiveFilename,
-      url: mxcUrl,
-      info: {
-        mimetype: effectiveMime,
-        size: buffer.length,
-      },
+      info,
     };
+    if (encryptedFile) {
+      // Encrypted rooms use `file` with key material; no top-level `url`.
+      content.file = { ...encryptedFile, url: mxcUrl, mimetype: effectiveMime };
+    } else {
+      content.url = mxcUrl;
+    }
 
     const effectiveThreadRoot = resolveThreadRoot(room, replyToEventId, threadRootEventId);
     const relatesTo = buildRelatesTo(effectiveThreadRoot, replyToEventId);
