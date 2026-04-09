@@ -453,6 +453,8 @@ export const sendImageHandler = async (
     let mxcUrl: string;
     let encryptedFile: Omit<EncryptedFile, "url" | "mimetype"> | null = null;
 
+    let thumbnailFile: EncryptedFile | null = null;
+
     if (isEncryptedRoom) {
       const { ciphertext, file } = encryptAttachment(buffer);
       // Upload the ciphertext as application/octet-stream — Matrix content repo
@@ -466,6 +468,24 @@ export const sendImageHandler = async (
       });
       mxcUrl = uploadResponse.content_uri;
       encryptedFile = file;
+
+      // Element Desktop requires info.thumbnail_file to render inline previews
+      // in encrypted rooms (mobile Element is lenient and falls back to the
+      // main file). Without a proper image library to generate a real
+      // downscaled thumbnail, we re-encrypt the original buffer with a fresh
+      // key and upload it as the thumbnail. For small images (QR codes, icons)
+      // this is correct behavior; for larger photos this wastes bandwidth but
+      // is functionally fine until sharp/jimp is added.
+      const thumbEncrypted = encryptAttachment(buffer);
+      const thumbUpload = await client.uploadContent(thumbEncrypted.ciphertext as any, {
+        type: "application/octet-stream",
+        name: `thumb-${effectiveFilename}`,
+      });
+      thumbnailFile = {
+        ...thumbEncrypted.file,
+        url: thumbUpload.content_uri,
+        mimetype: effectiveMime,
+      };
     } else {
       const uploadResponse = await client.uploadContent(buffer, {
         type: effectiveMime,
@@ -485,6 +505,14 @@ export const sendImageHandler = async (
     if (dims) {
       info.w = dims.w;
       info.h = dims.h;
+    }
+    if (thumbnailFile) {
+      info.thumbnail_file = thumbnailFile;
+      info.thumbnail_info = {
+        mimetype: effectiveMime,
+        size: buffer.length,
+        ...(dims ? { w: dims.w, h: dims.h } : {}),
+      };
     }
     const content: Record<string, any> = {
       msgtype: "m.image",
