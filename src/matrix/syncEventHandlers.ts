@@ -64,12 +64,14 @@ export function extractQueuedMessage(
   // The Matrix SDK may put error messages IN the body field (e.g.
   // "** Unable to decrypt: DecryptionError: Unknown error **") which
   // makes content?.body truthy even though decryption actually failed.
+  // NOTE: The SDK may also change the event type from m.room.encrypted
+  // to m.room.message when wrapping the error, so check the body/msgtype
+  // pattern regardless of event type classification.
   const bodyStr = String(content?.body || "");
-  const isDecryptionError = isEncrypted && (
-    !bodyStr ||
+  const isDecryptionError =
     bodyStr.startsWith("** Unable to decrypt") ||
-    content?.msgtype === "m.bad.encrypted"
-  );
+    content?.msgtype === "m.bad.encrypted" ||
+    (isEncrypted && !bodyStr);
 
   return {
     eventId: eid,
