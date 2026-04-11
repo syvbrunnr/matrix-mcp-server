@@ -61,21 +61,30 @@ export function extractQueuedMessage(
   const room = client.getRoom(evtRoomId);
   const isEncrypted = evtType === EventType.RoomMessageEncrypted;
 
+  // The Matrix SDK may put error messages IN the body field (e.g.
+  // "** Unable to decrypt: DecryptionError: Unknown error **") which
+  // makes content?.body truthy even though decryption actually failed.
+  const bodyStr = String(content?.body || "");
+  const isDecryptionError = isEncrypted && (
+    !bodyStr ||
+    bodyStr.startsWith("** Unable to decrypt") ||
+    content?.msgtype === "m.bad.encrypted"
+  );
+
   return {
     eventId: eid,
     roomId: evtRoomId,
     roomName: room?.name || evtRoomId,
     sender: event.getSender() || "",
-    body: String(content?.body || (isEncrypted ? "[encrypted]" : "")),
+    body: isDecryptionError ? "[encrypted]" : bodyStr,
     timestamp: event.getTs(),
     isDM: dmRoomIds.has(evtRoomId),
     ...(relatesTo?.rel_type === "io.element.thread" || relatesTo?.rel_type === "m.thread"
       ? { threadRootEventId: relatesTo.event_id } : {}),
     ...(relatesTo?.["m.in_reply_to"]?.event_id
       ? { replyToEventId: relatesTo["m.in_reply_to"].event_id } : {}),
-    ...(isEncrypted && !content?.body ? { decryptionFailed: true } : {}),
-    ...((isEncrypted && !content?.body && (event as any).decryptionFailureReason)
-      ? { decryptionFailureReason: (event as any).decryptionFailureReason } : {}),
+    ...(isDecryptionError ? { decryptionFailed: true } : {}),
+    ...(isDecryptionError ? { decryptionFailureReason: bodyStr || "unknown" } : {}),
   };
 }
 

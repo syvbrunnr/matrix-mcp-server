@@ -201,6 +201,26 @@ describe("extractQueuedMessage", () => {
     expect(msg!.body).toBe("[encrypted]");
     expect(msg!.decryptionFailed).toBe(true);
   });
+
+  it("detects SDK decryption error messages in body field", () => {
+    const encrypted = {
+      getType: () => EventType.RoomMessageEncrypted,
+      getSender: () => "@alice:ex.com",
+      getRoomId: () => "!dm:ex.com",
+      getId: () => "$enc2",
+      getTs: () => 3000,
+      getContent: () => ({ body: "** Unable to decrypt: DecryptionError: Unknown error **", msgtype: "m.bad.encrypted" }),
+      getClearContent: () => null,
+      isRedacted: () => false,
+    };
+    const client = mockClient({ rooms: [{ roomId: "!dm:ex.com", name: "DM", joinedMembers: 2 }] });
+    const msg = extractQueuedMessage(encrypted as any, "@mimir:ex.com", dmRoomIds, client);
+    expect(msg).not.toBeNull();
+    expect(msg!.body).toBe("[encrypted]");
+    expect(msg!.decryptionFailed).toBe(true);
+    expect(msg!.decryptionFailureReason).toContain("Unable to decrypt");
+    expect(msg!.isDM).toBe(true);
+  });
 });
 
 describe("scheduleDecryptionRetries", () => {
