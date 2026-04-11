@@ -73,6 +73,7 @@ export function extractQueuedMessage(
     content?.msgtype === "m.bad.encrypted" ||
     (isEncrypted && !bodyStr);
 
+
   return {
     eventId: eid,
     roomId: evtRoomId,
@@ -154,8 +155,10 @@ export function scheduleDecryptionRetries(
   event.once(MatrixEventEvent.Decrypted, () => {
     try {
       const decryptedContent = event.getClearContent?.() || event.getContent();
-      if (decryptedContent?.body) {
-        queue.updateDecryptedBody(eventId, String(decryptedContent.body));
+      const decBody = String(decryptedContent?.body || "");
+      // Only update if genuinely decrypted — not if SDK put error in body
+      if (decBody && !decBody.startsWith("** Unable to decrypt") && decryptedContent?.msgtype !== "m.bad.encrypted") {
+        queue.updateDecryptedBody(eventId, decBody);
       }
     } catch (decErr: any) {
       console.error(`[autoSync] Decryption update failed for ${eventId}: ${decErr.message}`);

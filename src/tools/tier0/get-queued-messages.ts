@@ -58,20 +58,39 @@ export const getQueuedMessagesHandler = async (
         messageCount: contents.messages.length,
         reactionCount: contents.reactions.length,
         inviteCount: contents.invites.length,
-        messages: contents.messages.map(m => ({
-          eventId: m.eventId,
-          room: m.roomName,
-          roomId: m.roomId,
-          sender: m.sender,
-          body: m.body,
-          timestamp: new Date(m.timestamp).toISOString(),
-          isDM: m.isDM,
-          ...(m.threadRootEventId ? { threadRootEventId: m.threadRootEventId } : {}),
-          ...(m.replyToEventId ? { replyToEventId: m.replyToEventId } : {}),
-          ...(m.decryptionFailed ? { decryptionFailed: true } : {}),
-          ...(m.decryptionFailureReason ? { decryptionFailureReason: m.decryptionFailureReason } : {}),
-          ...(m.editedOriginalEventId ? { editedOriginalEventId: m.editedOriginalEventId } : {}),
-        })),
+        messages: contents.messages.map(m => {
+          // Fallback: if message has SDK decryption error, try to read from synced timeline
+          let body = m.body;
+          let decryptionFailed = m.decryptionFailed;
+          if (typeof body === "string" && body.startsWith("** Unable to decrypt")) {
+            const syncClient = getSyncClient();
+            if (syncClient) {
+              const room = syncClient.getRoom(m.roomId);
+              const timelineEvent = room?.findEventById(m.eventId);
+              if (timelineEvent) {
+                const clearContent = timelineEvent.getClearContent?.();
+                if (clearContent?.body && !String(clearContent.body).startsWith("** Unable to decrypt")) {
+                  body = String(clearContent.body);
+                  decryptionFailed = false;
+                }
+              }
+            }
+          }
+          return {
+            eventId: m.eventId,
+            room: m.roomName,
+            roomId: m.roomId,
+            sender: m.sender,
+            body,
+            timestamp: new Date(m.timestamp).toISOString(),
+            isDM: m.isDM,
+            ...(m.threadRootEventId ? { threadRootEventId: m.threadRootEventId } : {}),
+            ...(m.replyToEventId ? { replyToEventId: m.replyToEventId } : {}),
+            ...(decryptionFailed ? { decryptionFailed: true } : {}),
+            ...(m.decryptionFailureReason ? { decryptionFailureReason: m.decryptionFailureReason } : {}),
+            ...(m.editedOriginalEventId ? { editedOriginalEventId: m.editedOriginalEventId } : {}),
+          };
+        }),
         reactions: contents.reactions.map(r => ({
           eventId: r.eventId,
           room: r.roomName,
