@@ -160,8 +160,9 @@ export function scheduleDecryptionRetries(
     }
   });
 
-  // Timed retries — room keys may arrive via key backup or to-device messages
-  const retryDelays = [2000, 5000, 15000]; // 2s, 5s, 15s
+  // Timed retries — room keys may arrive via key backup or to-device messages.
+  // Extended to 120s because Dendrite key sharing can be slow (observed 15s+ failures).
+  const retryDelays = [2000, 5000, 15000, 30000, 60000, 120000]; // 2s, 5s, 15s, 30s, 60s, 120s
   for (const delay of retryDelays) {
     setTimeout(async () => {
       try {
@@ -171,8 +172,9 @@ export function scheduleDecryptionRetries(
         if (currentContent?.body) return; // Already decrypted
         await (event as any).attemptDecryption(crypto);
         const retryContent = event.getClearContent?.() || event.getContent();
-        if (retryContent?.body && retryContent.body !== "[encrypted]") {
-          queue.updateDecryptedBody(eventId, String(retryContent.body));
+        const retryBody = String(retryContent?.body || "");
+        if (retryBody && retryBody !== "[encrypted]" && !retryBody.startsWith("** Unable to decrypt")) {
+          queue.updateDecryptedBody(eventId, retryBody);
           console.error(`[autoSync] Decryption retry succeeded for ${eventId} after ${delay}ms`);
         }
       } catch {
