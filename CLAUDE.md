@@ -89,7 +89,7 @@ The server provides these MCP tools (all require `matrixUserId` parameter):
 - Default configuration is set up for Keycloak but can be customized via environment variables
 - Matrix client credentials are now configurable via environment variables
 - All HTTPS requests use `rejectUnauthorized: false` for local development
-- **E2EE DMs**: Root cause identified and fixed. `stopClient()` in sync restart paths killed the Rust crypto backend permanently (cryptoBackend.stop() is irreversible). Fix: cc4c1cb removed stopClient() from restart paths. Decryption retry mechanism (scheduleDecryptionRetries in syncEventHandlers.ts) retries at 2s/5s/15s. Current success rate: 99.4%. If DM decryption fails, check crypto store health (e2ee-diagnostic.json) and sync restart paths — never call stopClient().
+- **E2EE DMs**: Root cause identified and fixed. `stopClient()` in sync restart paths killed the Rust crypto backend permanently (cryptoBackend.stop() is irreversible). Fix: cc4c1cb removed stopClient() from restart paths. Decryption retry mechanism (scheduleDecryptionRetries in syncEventHandlers.ts) retries at 2s/5s/15s/30s/60s/120s. Fix 5fd7cd4: timer retries were bailing when SDK put error text in the body field (e.g. "** Unable to decrypt..."), mistaking it for successful decryption. Now checks for error patterns before skipping, consistent with the event-based listener. If DM decryption fails, check crypto store health (e2ee-diagnostic.json) and sync restart paths — never call stopClient().
 
 ## API Changes
 
