@@ -101,6 +101,7 @@ if (!process.env.MCP_CHILD) {
       type?: string; eventId?: string; roomId: string; roomName?: string;
       sender: string; isDM: boolean; body?: string;
       threadRootEventId?: string; replyToEventId?: string;
+      editedOriginalEventId?: string;
       emoji?: string; reactedToEventId?: string; invitedBy?: string;
     }) => {
       if (!event || !matchesSubscription(event)) return;
@@ -127,13 +128,15 @@ if (!process.env.MCP_CHILD) {
         if (event.emoji) meta.emoji = event.emoji;
         if (event.reactedToEventId) meta.reacted_to_event_id = event.reactedToEventId;
       } else {
+        const isEdit = !!event.editedOriginalEventId;
         content = event.isDM
-          ? "New DM — call get-queued-messages to read actual content"
-          : "New message — call get-queued-messages to read actual content";
-        meta.type = "message";
+          ? `${isEdit ? "Edited" : "New"} DM — call get-queued-messages to read actual content`
+          : `${isEdit ? "Edited" : "New"} message — call get-queued-messages to read actual content`;
+        meta.type = isEdit ? "edit" : "message";
         meta.sender = event.sender;
         meta.is_dm = String(event.isDM);
         if (event.eventId) meta.event_id = event.eventId;
+        if (event.editedOriginalEventId) meta.edited_original_event_id = event.editedOriginalEventId;
       }
 
       server.server.notification({

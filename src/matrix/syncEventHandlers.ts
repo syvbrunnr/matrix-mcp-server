@@ -118,8 +118,10 @@ export function handleEditEvent(
 
   const editResult = queue.tryEditInPlace(originalEventId, newBody);
 
-  if (editResult === "fetched") {
-    // Original already consumed — enqueue as a new edit message
+  if (editResult === "fetched" || editResult === "not-found") {
+    // "fetched": original already consumed — enqueue edit as new message
+    // "not-found": original was never queued (sent before sync, or GC'd) —
+    //   still enqueue so the edit content is visible to the agent
     const eid = event.getId();
     if (!eid) return;
     const evtRoomId = event.getRoomId() || "";
@@ -136,8 +138,7 @@ export function handleEditEvent(
       editedOriginalEventId: originalEventId,
     });
   }
-  // "in-place" — already updated, nothing more to do
-  // "not-found" — original was never queued (e.g. own message), skip
+  // "in-place" — already updated in pending queue, nothing more to do
 }
 
 /**
