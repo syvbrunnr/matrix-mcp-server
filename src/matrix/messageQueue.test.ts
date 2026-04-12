@@ -105,9 +105,11 @@ describe("MessageQueue", () => {
       expect(queue.enqueueReaction(r)).toBe(false);
     });
 
-    it("emits new-item for reactions", (done) => {
+    it("emits new-item for reactions with emoji and target event", (done) => {
       queue.on("new-item", (evt: any) => {
         expect(evt.type).toBe("reaction");
+        expect(evt.emoji).toBe("👍");
+        expect(evt.reactedToEventId).toBe("$target-event");
         done();
       });
       queue.enqueueReaction(makeReaction());

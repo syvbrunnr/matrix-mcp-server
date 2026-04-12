@@ -213,7 +213,7 @@ export class MessageQueue extends EventEmitter {
       reaction.timestamp, reaction.emoji, reaction.reactedToEventId
     );
     if (result.changes > 0) {
-      this.emit("new-item", { type: "reaction", roomId: reaction.roomId, roomName: reaction.roomName, sender: reaction.sender, isDM: false });
+      this.emit("new-item", { type: "reaction", roomId: reaction.roomId, roomName: reaction.roomName, sender: reaction.sender, isDM: false, emoji: reaction.emoji, reactedToEventId: reaction.reactedToEventId });
       return true;
     }
     return false;

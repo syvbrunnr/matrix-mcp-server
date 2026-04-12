@@ -119,9 +119,13 @@ if (!process.env.MCP_CHILD) {
         meta.type = "invite";
         meta.invited_by = event.invitedBy || event.sender;
       } else if (event.type === "reaction") {
-        content = `Reaction`;
+        content = event.emoji
+          ? `${event.emoji} received on message ${event.reactedToEventId || "unknown"}`
+          : `Reaction`;
         meta.type = "reaction";
         meta.sender = event.sender;
+        if (event.emoji) meta.emoji = event.emoji;
+        if (event.reactedToEventId) meta.reacted_to_event_id = event.reactedToEventId;
       } else {
         content = event.isDM
           ? "New DM — call get-queued-messages to read actual content"
