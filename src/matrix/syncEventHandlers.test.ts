@@ -324,6 +324,31 @@ describe("scheduleDecryptionRetries", () => {
     });
   });
 
+  it("retries when getClearContent has SDK error body instead of real decryption", () => {
+    // Bug fix: SDK may put "** Unable to decrypt..." in the body, making
+    // getClearContent()?.body truthy. Retries should NOT bail in this case.
+    let decryptedBody: string | null = null;
+    const event: any = {
+      once: () => {},
+      getClearContent: () =>
+        decryptedBody
+          ? { body: decryptedBody }
+          : { body: "** Unable to decrypt: DecryptionError: Unknown error **", msgtype: "m.bad.encrypted" },
+      getContent: () => ({}),
+      attemptDecryption: async () => {
+        decryptedBody = "finally decrypted";
+      },
+    };
+    const queue = { updateDecryptedBody: jest.fn() };
+    const client = mockCryptoClient();
+    scheduleDecryptionRetries(event, "$enc-err", client, queue as any);
+
+    jest.advanceTimersByTime(2000);
+    return Promise.resolve().then(() => {
+      expect(queue.updateDecryptedBody).toHaveBeenCalledWith("$enc-err", "finally decrypted");
+    });
+  });
+
   it("skips retry if already decrypted", () => {
     const event = mockEncryptedEvent({ body: "already decrypted" });
     const queue = mockQueue();

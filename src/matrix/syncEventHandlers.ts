@@ -174,7 +174,9 @@ export function scheduleDecryptionRetries(
         const crypto = client.getCrypto?.();
         if (!crypto) return;
         const currentContent = event.getClearContent?.();
-        if (currentContent?.body) return; // Already decrypted
+        const currentBody = String(currentContent?.body || "");
+        // Only skip retry if genuinely decrypted — not if SDK put error in body
+        if (currentBody && !currentBody.startsWith("** Unable to decrypt") && currentContent?.msgtype !== "m.bad.encrypted") return;
         await (event as any).attemptDecryption(crypto);
         const retryContent = event.getClearContent?.() || event.getContent();
         const retryBody = String(retryContent?.body || "");
