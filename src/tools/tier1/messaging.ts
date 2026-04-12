@@ -1,6 +1,7 @@
 import { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { encryptAttachment as meaEncryptAttachment } from "matrix-encrypt-attachment";
+import sharp from "sharp";
 import { createConfiguredMatrixClient, getAccessToken, getMatrixContext } from "../../utils/server-helpers.js";
 import { removeClientFromCache } from "../../matrix/client.js";
 import { shouldEvictClientCache, getDiagnosticHint } from "../../utils/matrix-errors.js";
@@ -386,11 +387,50 @@ ${!dmRoom ? "New DM room created" : "Used existing DM room"}`,
   }
 };
 
+/** Fetch an image from a URL and return its buffer + detected MIME type. */
+async function fetchImageFromUrl(url: string): Promise<{ buffer: Buffer; detectedMime: string; detectedFilename: string }> {
+  const response = await fetch(url, {
+    headers: { "User-Agent": "matrix-mcp-server/1.0" },
+    redirect: "follow",
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to fetch image from URL: ${response.status} ${response.statusText}`);
+  }
+  const contentType = response.headers.get("content-type") || "image/jpeg";
+  const mime = contentType.split(";")[0].trim();
+  const arrayBuffer = await response.arrayBuffer();
+  const buffer = Buffer.from(arrayBuffer);
+
+  // Derive filename from URL path, falling back to a default.
+  let detectedFilename = "image.jpg";
+  try {
+    const pathname = new URL(url).pathname;
+    const lastSegment = pathname.split("/").filter(Boolean).pop();
+    if (lastSegment && /\.\w{2,5}$/.test(lastSegment)) {
+      detectedFilename = lastSegment;
+    }
+  } catch { /* keep default */ }
+
+  // Map common MIME types to file extensions if filename has no extension.
+  const extMap: Record<string, string> = {
+    "image/jpeg": ".jpg", "image/png": ".png", "image/gif": ".gif",
+    "image/webp": ".webp", "image/svg+xml": ".svg",
+  };
+  if (!/\.\w{2,5}$/.test(detectedFilename) && extMap[mime]) {
+    detectedFilename += extMap[mime];
+  }
+
+  return { buffer, detectedMime: mime, detectedFilename };
+}
+
 // Tool: Send image
 export const sendImageHandler = async (
-  { roomId, imageBase64, mimeType, filename, body, replyToEventId, threadRootEventId }: {
+  { roomId, imageBase64, imageUrl, maxWidth, maxHeight, mimeType, filename, body, replyToEventId, threadRootEventId }: {
     roomId: string;
-    imageBase64: string;
+    imageBase64?: string;
+    imageUrl?: string;
+    maxWidth?: number;
+    maxHeight?: number;
     mimeType?: string;
     filename?: string;
     body?: string;
@@ -401,6 +441,13 @@ export const sendImageHandler = async (
 ) => {
   const { matrixUserId, homeserverUrl } = getMatrixContext(requestInfo?.headers);
   const accessToken = getAccessToken(requestInfo?.headers, authInfo?.token);
+
+  if (!imageBase64 && !imageUrl) {
+    return {
+      content: [{ type: "text", text: "Error: Either imageBase64 or imageUrl must be provided." }],
+      isError: true,
+    };
+  }
 
   try {
     const client = await createConfiguredMatrixClient(homeserverUrl, matrixUserId, accessToken);
@@ -413,10 +460,42 @@ export const sendImageHandler = async (
       };
     }
 
-    // Decode base64 to buffer.
-    const buffer = Buffer.from(imageBase64, "base64");
-    const effectiveMime = mimeType || "image/png";
-    const effectiveFilename = filename || "image.png";
+    // Resolve image data from either base64 or URL.
+    let buffer: Buffer;
+    let autoMime: string | undefined;
+    let autoFilename: string | undefined;
+
+    if (imageUrl) {
+      const fetched = await fetchImageFromUrl(imageUrl);
+      buffer = fetched.buffer;
+      autoMime = fetched.detectedMime;
+      autoFilename = fetched.detectedFilename;
+    } else {
+      buffer = Buffer.from(imageBase64!, "base64");
+    }
+    // Resize if maxWidth or maxHeight specified.
+    const origSize = buffer.length;
+    if (maxWidth || maxHeight) {
+      const resizeOpts: sharp.ResizeOptions = { fit: "inside", withoutEnlargement: true };
+      let pipeline = sharp(buffer).resize(maxWidth || undefined, maxHeight || undefined, resizeOpts);
+      // Re-encode to the source format (default JPEG for photos).
+      const srcMime = mimeType || autoMime || "image/jpeg";
+      if (srcMime === "image/png") {
+        pipeline = pipeline.png();
+      } else if (srcMime === "image/webp") {
+        pipeline = pipeline.webp();
+      } else {
+        pipeline = pipeline.jpeg({ quality: 85 });
+      }
+      buffer = await pipeline.toBuffer();
+      // Update auto-detected mime after resize if format changed.
+      if (!mimeType && !autoMime) {
+        autoMime = "image/jpeg";
+      }
+    }
+
+    const effectiveMime = mimeType || autoMime || "image/png";
+    const effectiveFilename = filename || autoFilename || "image.png";
 
     // For E2EE rooms, media must also be encrypted. Element Desktop refuses
     // to render plaintext media URLs in encrypted rooms (info-leak protection).
@@ -464,7 +543,7 @@ export const sendImageHandler = async (
         };
       }
     } else {
-      const uploadResponse = await client.uploadContent(buffer, {
+      const uploadResponse = await client.uploadContent(buffer as any, {
         type: effectiveMime,
         name: effectiveFilename,
       });
@@ -531,7 +610,7 @@ export const sendImageHandler = async (
     return {
       content: [{
         type: "text",
-        text: `Image sent successfully to ${room.name || roomId}\nEvent ID: ${response.event_id}\nMXC URL: ${mxcUrl}\nSize: ${buffer.length} bytes`,
+        text: `Image sent successfully to ${room.name || roomId}\nEvent ID: ${response.event_id}\nMXC URL: ${mxcUrl}\nSize: ${buffer.length} bytes${origSize !== buffer.length ? ` (resized from ${origSize})` : ""}${imageUrl ? `\nSource: ${imageUrl}` : ""}`,
       }],
     };
   } catch (error: any) {
@@ -616,12 +695,28 @@ export const registerMessagingTools: ToolRegistrationFunction = (server) => {
     {
       title: "Send Image to Matrix Room",
       description:
-        "Upload and send an image to a Matrix room. Accepts base64-encoded image data. " +
+        "Upload and send an image to a Matrix room. Provide EITHER imageUrl (preferred — fetched server-side) " +
+        "OR imageBase64 (base64-encoded image data). Using imageUrl avoids loading large image data into agent context. " +
         "Supports threading and replies like send-message. " +
         "The image is uploaded to the Matrix content repository and sent as an m.image event.",
       inputSchema: {
         roomId: z.string().describe("Matrix room ID (e.g., !roomid:domain.com)"),
-        imageBase64: z.string().describe("Base64-encoded image data (no data: prefix)"),
+        imageBase64: z
+          .string()
+          .optional()
+          .describe("Base64-encoded image data (no data: prefix). Use imageUrl instead when possible."),
+        imageUrl: z
+          .string()
+          .optional()
+          .describe("URL of an image to fetch server-side and send. Preferred over imageBase64 — avoids loading image data into agent context."),
+        maxWidth: z
+          .number()
+          .optional()
+          .describe("Maximum width in pixels. Image is resized (aspect ratio preserved) if it exceeds this. Useful for large images."),
+        maxHeight: z
+          .number()
+          .optional()
+          .describe("Maximum height in pixels. Image is resized (aspect ratio preserved) if it exceeds this. Useful for large images."),
         mimeType: z
           .string()
           .default("image/png")
