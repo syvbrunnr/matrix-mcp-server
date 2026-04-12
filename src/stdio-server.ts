@@ -74,6 +74,23 @@ if (!process.env.MCP_CHILD) {
     console.error("matrix-mcp-server running on stdio");
     // Start auto-sync loop — pushes Matrix events into the message queue
     startAutoSync().catch((err) => console.error("[autoSync] Failed to start:", err));
+    // Auto-subscribe from env var (same pattern as Bifrost auto-register).
+    // MATRIX_AUTO_SUBSCRIBE accepts: "all", "dms", or comma-separated room IDs.
+    const autoSub = process.env.MATRIX_AUTO_SUBSCRIBE;
+    if (autoSub) {
+      const { setSubscription } = await import("./matrix/notificationSubscriptions.js");
+      if (autoSub === "all") {
+        setSubscription({ all: true });
+        console.error("[autoSubscribe] Subscribed to all notifications");
+      } else if (autoSub === "dms") {
+        setSubscription({ dms: true });
+        console.error("[autoSubscribe] Subscribed to DMs");
+      } else {
+        const rooms = autoSub.split(",").map(r => r.trim()).filter(Boolean);
+        setSubscription({ rooms });
+        console.error(`[autoSubscribe] Subscribed to ${rooms.length} room(s)`);
+      }
+    }
     // Notify Claude Code to re-fetch the tool list (handles hot reload).
     setTimeout(() => server.sendToolListChanged(), 100);
     // Send channel notifications when new messages arrive.
@@ -106,7 +123,9 @@ if (!process.env.MCP_CHILD) {
         meta.type = "reaction";
         meta.sender = event.sender;
       } else {
-        content = event.isDM ? "New DM" : "New message";
+        content = event.isDM
+          ? "New DM — call get-queued-messages to read actual content"
+          : "New message — call get-queued-messages to read actual content";
         meta.type = "message";
         meta.sender = event.sender;
         meta.is_dm = String(event.isDM);
