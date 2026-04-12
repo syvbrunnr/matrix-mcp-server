@@ -15,6 +15,7 @@ import { registerEventContextTools } from "./tools/tier0/event-context.js";
 
 // Tier 1 (Action tools)
 import { registerMessagingTools } from "./tools/tier1/messaging.js";
+import { registerImageSendingTools } from "./tools/tier1/image-sending.js";
 import { registerRoomManagementTools } from "./tools/tier1/room-management.js";
 import { registerRoomAdminTools } from "./tools/tier1/room-admin.js";
 import { registerMessageActionTools } from "./tools/tier1/message-actions.js";
@@ -62,6 +63,7 @@ registerEventContextTools(server);   // get-event-context
 
 // Tier 1: Action Matrix tools
 registerMessagingTools(server);       // send-message, send-direct-message
+registerImageSendingTools(server);   // send-image
 registerRoomManagementTools(server);  // create-room, join-room, leave-room, invite-user
 registerRoomAdminTools(server);       // set-room-name, set-room-topic, set-room-join-rules, set-room-history-visibility
 registerMessageActionTools(server);  // redact-event, send-reaction, edit-message

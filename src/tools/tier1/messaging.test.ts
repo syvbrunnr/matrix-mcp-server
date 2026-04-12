@@ -26,7 +26,8 @@ jest.unstable_mockModule("../../utils/threading.js", () => ({
 
 // Dynamic imports after mocks
 const { createConfiguredMatrixClient } = await import("../../utils/server-helpers.js");
-const { sendMessageHandler, sendImageHandler } = await import("./messaging.js");
+const { sendMessageHandler } = await import("./messaging.js");
+const { sendImageHandler } = await import("./image-sending.js");
 
 const mockCreateClient = createConfiguredMatrixClient as jest.MockedFunction<typeof createConfiguredMatrixClient>;
 const reqContext = { requestInfo: { headers: {} }, authInfo: { token: "tok" } };
