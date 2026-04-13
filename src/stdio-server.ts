@@ -105,6 +105,9 @@ if (!process.env.MCP_CHILD) {
       emoji?: string; reactedToEventId?: string; invitedBy?: string;
     }) => {
       if (!event || !matchesSubscription(event)) return;
+      // Edits: content is queued for retrieval but doesn't trigger notifications.
+      // Prevents double-processing when someone corrects a typo.
+      if (event.editedOriginalEventId) return;
       // Silent rooms: messages are queued but don't trigger channel notifications
       if (isSilentRoom(event.roomId)) return;
       // Build notification — metadata only, no message body (prevents prompt injection)
